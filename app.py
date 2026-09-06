@@ -4,8 +4,9 @@ import numpy as np
 from datetime import datetime, timedelta
 import yfinance as yf
 import plotly.graph_objects as go
+from scipy.stats import t  # для t-распределения
 
-st.set_page_config(page_title="Крипто-вероятности", layout="wide")
+st.set_page_config(page_title="Крипто-вероятности (улучшенная)", layout="wide")
 
 st.title("📊 Калькулятор вероятностей движения криптомонеты")
 st.markdown("Введите тикер монеты, и сервис рассчитает вероятности роста/падения на основе исторических данных.")
@@ -16,6 +17,17 @@ with st.sidebar:
     ticker = st.text_input("Введите тикер монеты", value="BTC-USD").upper()
     period = st.selectbox("Период для анализа", ["7d", "30d", "90d", "6mo", "1y"], index=2)
     forecast_days = st.slider("Прогнозируемый период (дней)", 1, 30, 7)
+    
+    # Выбор метода моделирования
+    method = st.selectbox(
+        "Метод моделирования",
+        ["t-распределение (рекомендуется)", "Нормальное распределение", "Исторический бутстрап"],
+        index=0
+    )
+    
+    # Параметр для EWMA (период полураспада)
+    half_life = st.slider("Период полураспада для весов (дней)", 5, 60, 20)
+    
     calculate = st.button("🚀 Рассчитать вероятности")
 
 # Основная логика
@@ -33,46 +45,83 @@ if calculate:
                 st.error("❌ Данные не содержат цену закрытия")
                 st.stop()
             
-            # Извлекаем цены закрытия и гарантируем, что это Series
             close_series = data['Close']
-            # Если это DataFrame (редкий случай), берём первую колонку
             if isinstance(close_series, pd.DataFrame):
                 close_series = close_series.iloc[:, 0]
             
-            if len(close_series) < 5:
-                st.error("❌ Недостаточно данных (минимум 5 дней)")
+            if len(close_series) < 10:
+                st.error("❌ Недостаточно данных (минимум 10 дней)")
                 st.stop()
             
-            # Текущая цена — скаляр
             current_price = float(close_series.iloc[-1])
         
-        # Расчёт доходностей
-        data['returns'] = np.log(close_series / close_series.shift(1))
-        data = data.dropna()
+        # Расчёт логарифмических доходностей
+        returns = np.log(close_series / close_series.shift(1)).dropna()
         
-        if len(data) < 2:
-            st.error("❌ Недостаточно данных после расчёта доходностей")
+        if len(returns) < 5:
+            st.error("❌ Недостаточно доходностей для анализа")
             st.stop()
         
-        mean_return = float(data['returns'].mean())
-        std_return = float(data['returns'].std())
+        # --- 1. Экспоненциально взвешенные параметры (EWMA) ---
+        # Рассчитываем веса: w_i = (1-lambda) * lambda^(i) , где lambda = exp(-ln2/half_life)
+        lambda_ = np.exp(-np.log(2) / half_life)
+        weights = (1 - lambda_) * (lambda_ ** np.arange(len(returns)-1, -1, -1))
+        weights = weights / weights.sum()  # нормализация
         
-        if std_return == 0:
-            st.warning("⚠️ Волатильность равна 0, вероятности не могут быть рассчитаны")
-            st.stop()
+        # Взвешенная средняя доходность
+        mean_return = np.average(returns, weights=weights)
+        # Взвешенная волатильность (смещённая оценка)
+        var_w = np.average((returns - mean_return)**2, weights=weights)
+        std_return = np.sqrt(var_w)
         
-        # Монте-Карло
+        # Для t-распределения оцениваем параметры методом моментов
+        # df = 2 * (var_return / (var_return_4 - var_return^2))? Но проще использовать scipy.stats.t.fit
+        # Оценим df, loc, scale по взвешенным данным? Непросто. Будем использовать обычный fit (без весов) как приближение.
+        # Для простоты используем обычный fit (не взвешенный) для t-распределения.
+        # Для нормального и бутстрапа используем взвешенные параметры.
+        
+        # Сохраним параметры
+        params = {
+            'mean': mean_return,
+            'std': std_return,
+            'returns': returns,
+            'weights': weights
+        }
+        
+        # Подгонка t-распределения (без весов, т.к. fit не поддерживает веса)
+        df, loc, scale = t.fit(returns)  # loc и scale - аналог mean и std для t
+        
+        # --- 2. Моделирование ---
         n_simulations = 10000
         np.random.seed(42)
-        random_returns = np.random.normal(mean_return, std_return, (forecast_days, n_simulations))
+        
+        if method == "Нормальное распределение":
+            random_returns = np.random.normal(mean_return, std_return, (forecast_days, n_simulations))
+        elif method == "t-распределение (рекомендуется)":
+            random_returns = t.rvs(df, loc=loc, scale=scale, size=(forecast_days, n_simulations))
+        else:  # Исторический бутстрап
+            # Генерируем индексы случайным образом с весами (выборка с возвращением)
+            indices = np.random.choice(len(returns), size=(forecast_days, n_simulations), p=weights)
+            random_returns = returns.iloc[indices].values  # форма (forecast_days, n_simulations)
+        
+        # Кумулятивная доходность и цены
         cumulative_returns = np.cumsum(random_returns, axis=0)
         final_prices = current_price * np.exp(cumulative_returns[-1, :])
         
+        # Вероятности
         prob_up = np.mean(final_prices > current_price) * 100
         prob_down = 100 - prob_up
+        
         expected_price = float(np.mean(final_prices))
         percentile_5 = float(np.percentile(final_prices, 5))
         percentile_95 = float(np.percentile(final_prices, 95))
+        
+        # VaR (95%) - потери, которые не будут превышены с вероятностью 95%
+        var_95 = np.percentile(final_prices - current_price, 5)  # 5% наихудших сценариев
+        
+        # Доп. метрики: вероятность роста >10% и падения >10%
+        prob_gain_10 = np.mean(final_prices > current_price * 1.1) * 100
+        prob_loss_10 = np.mean(final_prices < current_price * 0.9) * 100
         
         # Сохраняем результаты
         st.session_state.results = {
@@ -87,7 +136,12 @@ if calculate:
             'ticker': ticker,
             'forecast_days': forecast_days,
             'mean_return': mean_return,
-            'std_return': std_return
+            'std_return': std_return,
+            'var_95': var_95,
+            'prob_gain_10': prob_gain_10,
+            'prob_loss_10': prob_loss_10,
+            'method': method,
+            'half_life': half_life
         }
         
         st.success("✅ Расчёт завершён!")
@@ -102,6 +156,7 @@ if calculate:
 if st.session_state.get("results"):
     results = st.session_state.results
     
+    # Метрики
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("💰 Текущая цена", f"${results['current_price']:.2f}")
@@ -114,6 +169,17 @@ if st.session_state.get("results"):
     with col4:
         st.metric("📉 Вероятность падения", f"{results['prob_down']:.1f}%")
     
+    # Дополнительные метрики (VaR и вероятности сильных движений)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("📉 VaR (95%)", f"${results['var_95']:.2f}", 
+                 delta=f"{(results['var_95']/results['current_price']*100):.1f}%")
+    with col2:
+        st.metric("🚀 Рост >10%", f"{results['prob_gain_10']:.1f}%")
+    with col3:
+        st.metric("📉 Падение >10%", f"{results['prob_loss_10']:.1f}%")
+    
+    # График распределения
     st.subheader("📈 Распределение вероятных цен")
     fig = go.Figure()
     fig.add_trace(go.Histogram(
@@ -140,24 +206,27 @@ if st.session_state.get("results"):
     )
     st.plotly_chart(fig, use_container_width=True)
     
-    with st.expander("📋 Детальная статистика"):
+    # Детальная статистика
+    with st.expander("📋 Детальная статистика и параметры модели"):
         col1, col2 = st.columns(2)
         with col1:
-            st.write("**📊 Параметры доходности:**")
-            st.write(f"Средняя дневная доходность: {results['mean_return']*100:.3f}%")
-            st.write(f"Волатильность (σ): {results['std_return']*100:.3f}%")
+            st.write("**📊 Параметры доходности (взвешенные):**")
+            st.write(f"Средняя дневная доходность (EWMA): {results['mean_return']*100:.3f}%")
+            st.write(f"Волатильность (EWMA): {results['std_return']*100:.3f}%")
             st.write(f"Количество дней в выборке: {len(results['data'])}")
             st.write(f"Период: {results['data'].index[0].strftime('%Y-%m-%d')} - {results['data'].index[-1].strftime('%Y-%m-%d')}")
+            st.write(f"Метод моделирования: {results['method']}")
+            st.write(f"Период полураспада: {results['half_life']} дней")
         with col2:
             st.write("**🎯 Доверительные интервалы (5-95%):**")
             st.write(f"Нижняя граница: ${results['percentile_5']:.2f}")
             st.write(f"Верхняя граница: ${results['percentile_95']:.2f}")
             st.write(f"Диапазон: ${results['percentile_95'] - results['percentile_5']:.2f}")
-            prob_breakout_up = np.mean(results['final_prices'] > results['current_price'] * 1.1) * 100
-            prob_breakout_down = np.mean(results['final_prices'] < results['current_price'] * 0.9) * 100
-            st.write(f"Вероятность роста >10%: {prob_breakout_up:.1f}%")
-            st.write(f"Вероятность падения >10%: {prob_breakout_down:.1f}%")
+            st.write(f"VaR (95%): ${results['var_95']:.2f}")
+            st.write(f"Вероятность роста >10%: {results['prob_gain_10']:.1f}%")
+            st.write(f"Вероятность падения >10%: {results['prob_loss_10']:.1f}%")
     
+    # График исторической динамики
     st.subheader("📉 Историческая динамика")
     fig2 = go.Figure()
     fig2.add_trace(go.Scatter(
@@ -200,14 +269,21 @@ else:
         - **AVAX-USD** - Avalanche
         - **MATIC-USD** - Polygon
         """)
+    
+    with st.expander("🧠 О методе моделирования"):
+        st.write("""
+        - **t-распределение (рекомендуется)**: учитывает «толстые хвосты» – экстремальные движения случаются чаще, чем в нормальном распределении. 
+        - **Нормальное распределение**: классический подход, но недооценивает риски экстремальных движений.
+        - **Исторический бутстрап**: использует случайную выборку из реальных исторических доходностей (с весами по времени). Не делает предположений о распределении.
+        """)
 
 st.sidebar.markdown("---")
 st.sidebar.info(
-    "📌 **Как это работает:**\n\n"
-    "1. Анализируется историческая волатильность\n"
-    "2. Проводится 10 000 симуляций Монте-Карло\n"
-    "3. Рассчитываются вероятности роста/падения\n"
-    "4. Учитывается нормальное распределение доходностей\n\n"
+    "📌 **Улучшения в этой версии:**\n\n"
+    "✅ t-распределение для учёта толстых хвостов\n"
+    "✅ Экспоненциально взвешенные параметры (EWMA)\n"
+    "✅ Возможность выбора метода моделирования\n"
+    "✅ Расчёт VaR (95%) и вероятностей сильных движений\n\n"
     "⚠️ **Важно:** Результаты основаны на исторических данных и не гарантируют будущие движения."
 )
 st.sidebar.markdown("---")
