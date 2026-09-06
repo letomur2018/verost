@@ -92,20 +92,37 @@ def moving_average(series, window):
 # ---------- Анализ паттернов и подтверждений ----------
 def analyze_patterns_and_signals(data):
     """
-    Возвращает словарь с найденными паттернами и подтверждениями.
+    Возвращает список найденных паттернов с подтверждениями.
     """
-    # Извлекаем массивы (numpy) для скорости
-    o = data['Open'].values
-    h = data['High'].values
-    l = data['Low'].values
-    c = data['Close'].values
-    vol = data['Volume'].values  # numpy array
-    
+    # Приводим все нужные колонки к Series (на случай MultiIndex)
+    close_series = data['Close']
+    if isinstance(close_series, pd.DataFrame):
+        close_series = close_series.iloc[:, 0]
+    open_series = data['Open']
+    if isinstance(open_series, pd.DataFrame):
+        open_series = open_series.iloc[:, 0]
+    high_series = data['High']
+    if isinstance(high_series, pd.DataFrame):
+        high_series = high_series.iloc[:, 0]
+    low_series = data['Low']
+    if isinstance(low_series, pd.DataFrame):
+        low_series = low_series.iloc[:, 0]
+    vol_series = data['Volume']
+    if isinstance(vol_series, pd.DataFrame):
+        vol_series = vol_series.iloc[:, 0]
+
+    # Теперь берём numpy-массивы (одномерные)
+    o = open_series.values
+    h = high_series.values
+    l = low_series.values
+    c = close_series.values
+    vol = vol_series.values
+
     last_idx = len(c) - 1
     signals = []
-    
+
     # Проверяем последние 5 свечей на наличие паттернов
-    for i in range(max(0, last_idx-5), last_idx+1):
+    for i in range(max(0, last_idx - 5), last_idx + 1):
         if detect_hammer(o, h, l, c, i):
             signals.append({
                 'date': data.index[i].strftime('%Y-%m-%d'),
@@ -155,27 +172,26 @@ def analyze_patterns_and_signals(data):
                 'price': float(c[i]),
                 'strength': 'сильный'
             })
-    
-    # Добавляем подтверждения на основе последних данных
+
+    # Добавляем подтверждения (объём, MA, RSI, дивергенция)
     if len(data) > 20:
-        # 1. Текущий объём относительно среднего (за 20 дней)
-        current_vol = float(vol[-1])  # последнее значение
+        # 1. Объём
+        current_vol = float(vol[-1])
         avg_vol = float(np.mean(vol[-20:])) if len(vol) >= 20 else current_vol
         vol_confirmation = 'высокий' if current_vol > avg_vol * 1.5 else 'нормальный' if current_vol > avg_vol * 0.8 else 'низкий'
-        
-        # 2. Пересечение цены с MA20 и MA50
-        close_series = data['Close']
+
+        # 2. MA20 / MA50
         price = float(close_series.iloc[-1])
         ma20 = moving_average(close_series, 20).iloc[-1]
         ma50 = moving_average(close_series, 50).iloc[-1] if len(data) >= 50 else None
         price_above_ma20 = price > ma20
         price_above_ma50 = price > ma50 if ma50 is not None else None
-        
+
         # 3. RSI
         rsi_vals = rsi(close_series, 14)
         last_rsi = float(rsi_vals.iloc[-1])
         rsi_signal = 'перекупленность' if last_rsi > 70 else 'перепроданность' if last_rsi < 30 else 'нейтрально'
-        
+
         # 4. Дивергенция
         price_slope = close_series.iloc[-5:].values
         rsi_slope = rsi_vals.iloc[-5:].values
@@ -190,8 +206,8 @@ def analyze_patterns_and_signals(data):
                 div_signal = 'дивергенции нет'
         else:
             div_signal = 'недостаточно данных'
-        
-        # Добавляем подтверждения в первый сигнал (если есть)
+
+        # Добавляем подтверждения к первому сигналу (если есть)
         if signals:
             signals[0]['volume_confirmation'] = vol_confirmation
             signals[0]['price_above_ma20'] = price_above_ma20
@@ -213,7 +229,7 @@ def analyze_patterns_and_signals(data):
                 'rsi_signal': rsi_signal,
                 'divergence': div_signal
             })
-    
+
     return signals
 
 # ---------- Основной интерфейс ----------
