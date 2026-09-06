@@ -13,7 +13,6 @@ st.markdown("Введите тикер монеты, и сервис рассч�
 
 # ---------- Функции для паттернов (без TA-Lib) ----------
 def detect_hammer(o, h, l, c, idx):
-    """Молот (Hammer) - бычий разворот"""
     body = abs(c[idx] - o[idx])
     lower_shadow = min(o[idx], c[idx]) - l[idx]
     upper_shadow = h[idx] - max(o[idx], c[idx])
@@ -22,7 +21,6 @@ def detect_hammer(o, h, l, c, idx):
     return False
 
 def detect_shooting_star(o, h, l, c, idx):
-    """Падающая звезда (Shooting Star) - медвежий разворот"""
     body = abs(c[idx] - o[idx])
     upper_shadow = h[idx] - max(o[idx], c[idx])
     lower_shadow = min(o[idx], c[idx]) - l[idx]
@@ -31,7 +29,6 @@ def detect_shooting_star(o, h, l, c, idx):
     return False
 
 def detect_doji(o, h, l, c, idx):
-    """Доджи - неопределённость (тело очень маленькое)"""
     body = abs(c[idx] - o[idx])
     high_low = h[idx] - l[idx]
     if high_low > 0 and body / high_low < 0.1:
@@ -39,7 +36,6 @@ def detect_doji(o, h, l, c, idx):
     return False
 
 def detect_engulfing(o, h, l, c, idx):
-    """Поглощение (бычье или медвежье)"""
     if idx < 1:
         return None
     if c[idx] > o[idx] and c[idx-1] < o[idx-1]:
@@ -51,7 +47,6 @@ def detect_engulfing(o, h, l, c, idx):
     return None
 
 def detect_morning_star(o, h, l, c, idx):
-    """Утренняя звезда (бычий разворот) - три свечи"""
     if idx < 2:
         return False
     if c[idx-2] < o[idx-2] and c[idx] > o[idx]:
@@ -64,7 +59,6 @@ def detect_morning_star(o, h, l, c, idx):
     return False
 
 def detect_evening_star(o, h, l, c, idx):
-    """Вечерняя звезда (медвежий разворот) - три свечи"""
     if idx < 2:
         return False
     if c[idx-2] > o[idx-2] and c[idx] < o[idx]:
@@ -78,7 +72,6 @@ def detect_evening_star(o, h, l, c, idx):
 
 # ---------- Индикаторы ----------
 def rsi(series, period=14):
-    """Индекс относительной силы"""
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
@@ -91,10 +84,6 @@ def moving_average(series, window):
 
 # ---------- Анализ паттернов и подтверждений ----------
 def analyze_patterns_and_signals(data):
-    """
-    Возвращает список найденных паттернов с подтверждениями.
-    """
-    # Приводим все нужные колонки к Series (на случай MultiIndex)
     close_series = data['Close']
     if isinstance(close_series, pd.DataFrame):
         close_series = close_series.iloc[:, 0]
@@ -111,7 +100,6 @@ def analyze_patterns_and_signals(data):
     if isinstance(vol_series, pd.DataFrame):
         vol_series = vol_series.iloc[:, 0]
 
-    # Теперь берём numpy-массивы (одномерные)
     o = open_series.values
     h = high_series.values
     l = low_series.values
@@ -121,7 +109,6 @@ def analyze_patterns_and_signals(data):
     last_idx = len(c) - 1
     signals = []
 
-    # Проверяем последние 5 свечей на наличие паттернов
     for i in range(max(0, last_idx - 5), last_idx + 1):
         if detect_hammer(o, h, l, c, i):
             signals.append({
@@ -173,26 +160,21 @@ def analyze_patterns_and_signals(data):
                 'strength': 'сильный'
             })
 
-    # Добавляем подтверждения (объём, MA, RSI, дивергенция)
     if len(data) > 20:
-        # 1. Объём
         current_vol = float(vol[-1])
         avg_vol = float(np.mean(vol[-20:])) if len(vol) >= 20 else current_vol
         vol_confirmation = 'высокий' if current_vol > avg_vol * 1.5 else 'нормальный' if current_vol > avg_vol * 0.8 else 'низкий'
 
-        # 2. MA20 / MA50
         price = float(close_series.iloc[-1])
         ma20 = moving_average(close_series, 20).iloc[-1]
         ma50 = moving_average(close_series, 50).iloc[-1] if len(data) >= 50 else None
         price_above_ma20 = price > ma20
         price_above_ma50 = price > ma50 if ma50 is not None else None
 
-        # 3. RSI
         rsi_vals = rsi(close_series, 14)
         last_rsi = float(rsi_vals.iloc[-1])
         rsi_signal = 'перекупленность' if last_rsi > 70 else 'перепроданность' if last_rsi < 30 else 'нейтрально'
 
-        # 4. Дивергенция
         price_slope = close_series.iloc[-5:].values
         rsi_slope = rsi_vals.iloc[-5:].values
         if len(price_slope) >= 2 and len(rsi_slope) >= 2:
@@ -207,7 +189,6 @@ def analyze_patterns_and_signals(data):
         else:
             div_signal = 'недостаточно данных'
 
-        # Добавляем подтверждения к первому сигналу (если есть)
         if signals:
             signals[0]['volume_confirmation'] = vol_confirmation
             signals[0]['price_above_ma20'] = price_above_ma20
@@ -231,6 +212,83 @@ def analyze_patterns_and_signals(data):
             })
 
     return signals
+
+# ---------- Функция текстового анализа вероятностей ----------
+def analyze_probabilities(prob_up, prob_down, expected_price, current_price, 
+                          var_95, prob_gain_10, prob_loss_10, std_return, 
+                          forecast_days, signals):
+    analysis = []
+    
+    # 1. Направление
+    if prob_up > 60:
+        direction = "📈 **Бычий настрой** — вероятность роста значительно выше падения."
+    elif prob_down > 60:
+        direction = "📉 **Медвежий настрой** — вероятность падения значительно выше роста."
+    else:
+        direction = "⚖️ **Неопределённость** — вероятности близки к 50/50, рынок в боковике."
+    analysis.append(direction)
+    
+    # 2. Ожидаемое изменение
+    expected_change = (expected_price / current_price - 1) * 100
+    if expected_change > 2:
+        change_desc = f"Ожидаемый рост на {expected_change:.1f}% за {forecast_days} дней."
+    elif expected_change < -2:
+        change_desc = f"Ожидаемое падение на {-expected_change:.1f}% за {forecast_days} дней."
+    else:
+        change_desc = f"Ожидаемое изменение незначительно ({expected_change:.1f}%)."
+    analysis.append(f"📊 {change_desc}")
+    
+    # 3. Волатильность
+    if std_return > 0.03:
+        vol_desc = "Высокая волатильность — возможны сильные колебания."
+    elif std_return > 0.015:
+        vol_desc = "Умеренная волатильность."
+    else:
+        vol_desc = "Низкая волатильность — рынок спокойный."
+    analysis.append(f"🌊 {vol_desc}")
+    
+    # 4. VaR
+    var_percent = (var_95 / current_price) * 100
+    analysis.append(f"📉 **VaR (95%)**: потенциальные потери не превысят {var_percent:.1f}% с вероятностью 95%.")
+    
+    # 5. Сильные движения
+    if prob_gain_10 > 20:
+        analysis.append(f"🚀 Высокая вероятность ({prob_gain_10:.0f}%) роста >10%.")
+    elif prob_loss_10 > 20:
+        analysis.append(f"📉 Высокая вероятность ({prob_loss_10:.0f}%) падения >10%.")
+    else:
+        analysis.append("🔒 Вероятность сильных движений (>10%) невысока.")
+    
+    # 6. Паттерны и подтверждения
+    if signals:
+        latest = signals[0]
+        if 'pattern' in latest and latest['pattern'] != 'Нет свечного паттерна':
+            analysis.append(f"🕯️ Найден паттерн **{latest['pattern']}** ({latest['type']}).")
+            confirms = []
+            if latest.get('volume_confirmation') == 'высокий':
+                confirms.append("высокий объём")
+            if latest.get('price_above_ma20', False):
+                confirms.append("цена выше MA20")
+            if latest.get('rsi_signal') == 'перепроданность':
+                confirms.append("RSI перепроданность (бычий сигнал)")
+            elif latest.get('rsi_signal') == 'перекупленность':
+                confirms.append("RSI перекупленность (медвежий сигнал)")
+            if confirms:
+                analysis.append(f"✅ Подтверждения: {', '.join(confirms)}.")
+            else:
+                analysis.append("⚠️ Подтверждений недостаточно — сигнал слабый.")
+        else:
+            analysis.append("ℹ️ Свечных паттернов не обнаружено. Ориентируйтесь на индикаторы.")
+    
+    # 7. Рекомендация
+    if prob_up > 55 and prob_down < 45 and expected_change > 0:
+        analysis.append("💡 **Рекомендация**: рассмотреть возможность покупки (бычий сценарий).")
+    elif prob_down > 55 and prob_up < 45 and expected_change < 0:
+        analysis.append("💡 **Рекомендация**: рассмотреть возможность продажи или удержания (медвежий сценарий).")
+    else:
+        analysis.append("💡 **Рекомендация**: рынок неопределён — лучше дождаться более чёткого сигнала.")
+    
+    return analysis
 
 # ---------- Основной интерфейс ----------
 with st.sidebar:
@@ -327,6 +385,7 @@ if calculate:
             'percentile_5': percentile_5,
             'percentile_95': percentile_95,
             'final_prices': final_prices,
+            'random_returns': random_returns,  # сохраним для траекторий
             'data': data,
             'ticker': ticker,
             'forecast_days': forecast_days,
@@ -363,6 +422,19 @@ if st.session_state.get("results"):
         st.metric("📊 Вероятность роста", f"{results['prob_up']:.1f}%")
     with col4:
         st.metric("📉 Вероятность падения", f"{results['prob_down']:.1f}%")
+    
+    # --- АНАЛИЗ ВЕРОЯТНОСТЕЙ ---
+    st.subheader("🧠 Анализ вероятностей и рекомендации")
+    analysis_text = analyze_probabilities(
+        results['prob_up'], results['prob_down'],
+        results['expected_price'], results['current_price'],
+        results['var_95'], results['prob_gain_10'],
+        results['prob_loss_10'], results['std_return'],
+        results['forecast_days'],
+        results['signals']
+    )
+    for line in analysis_text:
+        st.write(line)
     
     st.subheader("🕯️ Обнаруженные свечные паттерны и подтверждения")
     signals = results['signals']
@@ -421,6 +493,41 @@ if st.session_state.get("results"):
         bargap=0.05
     )
     st.plotly_chart(fig, use_container_width=True)
+    
+    # --- ГРАФИК СЦЕНАРИЕВ (траектории) ---
+    st.subheader("📉 Примеры возможных траекторий (20 случайных сценариев)")
+    random_returns = results['random_returns']
+    current_price = results['current_price']
+    n_paths = 20
+    indices = np.random.choice(range(random_returns.shape[1]), min(n_paths, random_returns.shape[1]), replace=False)
+    fig_paths = go.Figure()
+    for idx in indices:
+        path_prices = current_price * np.exp(np.cumsum(random_returns[:, idx], axis=0))
+        path_prices = np.insert(path_prices, 0, current_price)
+        fig_paths.add_trace(go.Scatter(
+            x=list(range(len(path_prices))),
+            y=path_prices,
+            mode='lines',
+            line=dict(width=0.8, color='lightgray'),
+            showlegend=False
+        ))
+    # Средняя траектория
+    avg_path = current_price * np.exp(np.mean(np.cumsum(random_returns, axis=0), axis=1))
+    avg_path = np.insert(avg_path, 0, current_price)
+    fig_paths.add_trace(go.Scatter(
+        x=list(range(len(avg_path))),
+        y=avg_path,
+        mode='lines',
+        line=dict(color='red', width=2),
+        name='Средняя траектория'
+    ))
+    fig_paths.update_layout(
+        xaxis_title="Дни",
+        yaxis_title="Цена ($)",
+        height=400,
+        hovermode='x unified'
+    )
+    st.plotly_chart(fig_paths, use_container_width=True)
     
     with st.expander("📋 Детальная статистика и параметры модели"):
         col1, col2 = st.columns(2)
@@ -513,7 +620,8 @@ st.sidebar.info(
     "📌 **Что нового:**\n\n"
     "✅ Детекция свечных паттернов (без TA-Lib)\n"
     "✅ Подтверждения (объём, MA, RSI, дивергенция)\n"
-    "✅ Вывод сигналов в таблице\n"
+    "✅ Текстовый анализ вероятностей и рекомендации\n"
+    "✅ График сценариев Монте-Карло\n"
     "✅ t-распределение + EWMA для вероятностей\n\n"
     "⚠️ Результаты не являются инвестиционной рекомендацией."
 )
