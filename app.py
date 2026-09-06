@@ -17,7 +17,6 @@ def detect_hammer(o, h, l, c, idx):
     body = abs(c[idx] - o[idx])
     lower_shadow = min(o[idx], c[idx]) - l[idx]
     upper_shadow = h[idx] - max(o[idx], c[idx])
-    # нижняя тень >= 2*body, верхняя <= 0.3*body, тело не слишком маленькое
     if body > 0 and lower_shadow >= 2*body and upper_shadow <= 0.3*body:
         return True
     return False
@@ -43,11 +42,9 @@ def detect_engulfing(o, h, l, c, idx):
     """Поглощение (бычье или медвежье)"""
     if idx < 1:
         return None
-    # Бычье: текущая свеча зелёная, предыдущая красная, тело текущей перекрывает предыдущую
     if c[idx] > o[idx] and c[idx-1] < o[idx-1]:
         if c[idx] >= o[idx-1] and o[idx] <= c[idx-1]:
             return 'bullish'
-    # Медвежье: текущая красная, предыдущая зелёная, тело перекрывает
     if c[idx] < o[idx] and c[idx-1] > o[idx-1]:
         if o[idx] >= c[idx-1] and c[idx] <= o[idx-1]:
             return 'bearish'
@@ -57,9 +54,6 @@ def detect_morning_star(o, h, l, c, idx):
     """Утренняя звезда (бычий разворот) - три свечи"""
     if idx < 2:
         return False
-    # 1-я свеча: медвежья (длинная)
-    # 2-я: доджи или маленькая свеча (с тенью)
-    # 3-я: бычья (длинная), закрывается выше середины 1-й
     if c[idx-2] < o[idx-2] and c[idx] > o[idx]:
         body1 = abs(c[idx-2] - o[idx-2])
         body2 = abs(c[idx-1] - o[idx-1])
@@ -73,7 +67,6 @@ def detect_evening_star(o, h, l, c, idx):
     """Вечерняя звезда (медвежий разворот) - три свечи"""
     if idx < 2:
         return False
-    # 1-я бычья, 2-я доджи/маленькая, 3-я медвежья, закрывается ниже середины 1-й
     if c[idx-2] > o[idx-2] and c[idx] < o[idx]:
         body1 = abs(c[idx-2] - o[idx-2])
         body2 = abs(c[idx-1] - o[idx-1])
@@ -101,98 +94,91 @@ def analyze_patterns_and_signals(data):
     """
     Возвращает словарь с найденными паттернами и подтверждениями.
     """
+    # Извлекаем массивы (numpy) для скорости
     o = data['Open'].values
     h = data['High'].values
     l = data['Low'].values
     c = data['Close'].values
-    vol = data['Volume'].values
+    vol = data['Volume'].values  # numpy array
     
-    # Последние 10 свечей для поиска
     last_idx = len(c) - 1
     signals = []
     
-    # Проверяем каждую из последних 5 свечей на наличие паттернов
+    # Проверяем последние 5 свечей на наличие паттернов
     for i in range(max(0, last_idx-5), last_idx+1):
-        # Молот
         if detect_hammer(o, h, l, c, i):
             signals.append({
                 'date': data.index[i].strftime('%Y-%m-%d'),
                 'pattern': 'Молот (Hammer)',
                 'type': 'бычий разворот',
-                'price': c[i],
+                'price': float(c[i]),
                 'strength': 'средний'
             })
-        # Падающая звезда
         if detect_shooting_star(o, h, l, c, i):
             signals.append({
                 'date': data.index[i].strftime('%Y-%m-%d'),
                 'pattern': 'Падающая звезда (Shooting Star)',
                 'type': 'медвежий разворот',
-                'price': c[i],
+                'price': float(c[i]),
                 'strength': 'средний'
             })
-        # Доджи
         if detect_doji(o, h, l, c, i):
             signals.append({
                 'date': data.index[i].strftime('%Y-%m-%d'),
                 'pattern': 'Доджи (Doji)',
                 'type': 'неопределённость',
-                'price': c[i],
+                'price': float(c[i]),
                 'strength': 'слабый'
             })
-        # Поглощение
         engulf = detect_engulfing(o, h, l, c, i)
         if engulf:
             signals.append({
                 'date': data.index[i].strftime('%Y-%m-%d'),
                 'pattern': 'Поглощение (Engulfing)',
                 'type': f'{engulf} разворот',
-                'price': c[i],
+                'price': float(c[i]),
                 'strength': 'сильный'
             })
-        # Утренняя звезда
         if detect_morning_star(o, h, l, c, i):
             signals.append({
                 'date': data.index[i].strftime('%Y-%m-%d'),
                 'pattern': 'Утренняя звезда (Morning Star)',
                 'type': 'бычий разворот',
-                'price': c[i],
+                'price': float(c[i]),
                 'strength': 'сильный'
             })
-        # Вечерняя звезда
         if detect_evening_star(o, h, l, c, i):
             signals.append({
                 'date': data.index[i].strftime('%Y-%m-%d'),
                 'pattern': 'Вечерняя звезда (Evening Star)',
                 'type': 'медвежий разворот',
-                'price': c[i],
+                'price': float(c[i]),
                 'strength': 'сильный'
             })
     
     # Добавляем подтверждения на основе последних данных
     if len(data) > 20:
         # 1. Текущий объём относительно среднего (за 20 дней)
-        avg_vol = data['Volume'].rolling(20).mean().iloc[-1]
-        current_vol = data['Volume'].iloc[-1]
+        current_vol = float(vol[-1])  # последнее значение
+        avg_vol = float(np.mean(vol[-20:])) if len(vol) >= 20 else current_vol
         vol_confirmation = 'высокий' if current_vol > avg_vol * 1.5 else 'нормальный' if current_vol > avg_vol * 0.8 else 'низкий'
         
         # 2. Пересечение цены с MA20 и MA50
-        ma20 = moving_average(data['Close'], 20).iloc[-1]
-        ma50 = moving_average(data['Close'], 50).iloc[-1] if len(data) >= 50 else None
-        price = data['Close'].iloc[-1]
+        close_series = data['Close']
+        price = float(close_series.iloc[-1])
+        ma20 = moving_average(close_series, 20).iloc[-1]
+        ma50 = moving_average(close_series, 50).iloc[-1] if len(data) >= 50 else None
         price_above_ma20 = price > ma20
         price_above_ma50 = price > ma50 if ma50 is not None else None
         
         # 3. RSI
-        rsi_vals = rsi(data['Close'], 14)
-        last_rsi = rsi_vals.iloc[-1]
+        rsi_vals = rsi(close_series, 14)
+        last_rsi = float(rsi_vals.iloc[-1])
         rsi_signal = 'перекупленность' if last_rsi > 70 else 'перепроданность' if last_rsi < 30 else 'нейтрально'
         
-        # 4. Дивергенция (цена растёт, RSI падает или наоборот) - упрощённо
-        # Берём последние 5 значений
-        price_slope = data['Close'].iloc[-5:].values
+        # 4. Дивергенция
+        price_slope = close_series.iloc[-5:].values
         rsi_slope = rsi_vals.iloc[-5:].values
-        # Если цена идёт вверх, а RSI вниз -> медвежья дивергенция
         if len(price_slope) >= 2 and len(rsi_slope) >= 2:
             price_change = price_slope[-1] - price_slope[0]
             rsi_change = rsi_slope[-1] - rsi_slope[0]
@@ -207,7 +193,6 @@ def analyze_patterns_and_signals(data):
         
         # Добавляем подтверждения в первый сигнал (если есть)
         if signals:
-            # Добавим поля к последнему сигналу
             signals[0]['volume_confirmation'] = vol_confirmation
             signals[0]['price_above_ma20'] = price_above_ma20
             signals[0]['price_above_ma50'] = price_above_ma50 if ma50 is not None else None
@@ -215,12 +200,11 @@ def analyze_patterns_and_signals(data):
             signals[0]['rsi_signal'] = rsi_signal
             signals[0]['divergence'] = div_signal
         else:
-            # Если паттернов нет, создаём "сигнал" из индикаторов
             signals.append({
                 'date': data.index[-1].strftime('%Y-%m-%d'),
                 'pattern': 'Нет свечного паттерна',
                 'type': 'только индикаторы',
-                'price': data['Close'].iloc[-1],
+                'price': price,
                 'strength': 'нет',
                 'volume_confirmation': vol_confirmation,
                 'price_above_ma20': price_above_ma20,
@@ -275,7 +259,7 @@ if calculate:
             
             current_price = float(close_series.iloc[-1])
         
-        # Расчёт доходностей (как ранее)
+        # Расчёт доходностей
         returns = np.log(close_series / close_series.shift(1)).dropna()
         if len(returns) < 10:
             st.error(f"❌ Недостаточно доходностей ({len(returns)} точек). Нужно минимум 10.")
@@ -316,10 +300,9 @@ if calculate:
         prob_gain_10 = np.mean(final_prices > current_price * 1.1) * 100
         prob_loss_10 = np.mean(final_prices < current_price * 0.9) * 100
         
-        # Анализ паттернов и подтверждений
+        # Анализ паттернов
         signals = analyze_patterns_and_signals(data)
         
-        # Сохраняем всё в сессию
         st.session_state.results = {
             'current_price': current_price,
             'expected_price': expected_price,
@@ -353,7 +336,6 @@ if calculate:
 if st.session_state.get("results"):
     results = st.session_state.results
     
-    # --- Верхние метрики ---
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("💰 Текущая цена", f"${results['current_price']:.2f}")
@@ -366,20 +348,16 @@ if st.session_state.get("results"):
     with col4:
         st.metric("📉 Вероятность падения", f"{results['prob_down']:.1f}%")
     
-    # --- Блок паттернов и сигналов ---
     st.subheader("🕯️ Обнаруженные свечные паттерны и подтверждения")
     signals = results['signals']
     if signals:
-        # Создаём DataFrame для красивого вывода
         df_signals = pd.DataFrame(signals)
-        # Выводим таблицу
         st.dataframe(
             df_signals[['date', 'pattern', 'type', 'price', 'strength']],
             use_container_width=True,
             hide_index=True
         )
         
-        # Дополнительные подтверждения (выводим из первого сигнала, если есть)
         first = signals[0]
         if 'volume_confirmation' in first:
             st.write("**📊 Подтверждения (на основе последней свечи):**")
@@ -402,7 +380,6 @@ if st.session_state.get("results"):
     else:
         st.info("ℹ️ Паттернов не обнаружено. Проверьте другие периоды.")
     
-    # --- График распределения ---
     st.subheader("📈 Распределение вероятных цен")
     fig = go.Figure()
     fig.add_trace(go.Histogram(
@@ -429,7 +406,6 @@ if st.session_state.get("results"):
     )
     st.plotly_chart(fig, use_container_width=True)
     
-    # --- Детальная статистика ---
     with st.expander("📋 Детальная статистика и параметры модели"):
         col1, col2 = st.columns(2)
         with col1:
@@ -450,7 +426,6 @@ if st.session_state.get("results"):
         st.write(f"Метод моделирования: {results['method']}")
         st.write(f"Период полураспада: {results['half_life']} дней")
     
-    # --- Историческая динамика ---
     st.subheader("📉 Историческая динамика")
     fig2 = go.Figure()
     fig2.add_trace(go.Scatter(
