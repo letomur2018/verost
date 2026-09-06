@@ -9,7 +9,7 @@ from scipy.stats import t
 st.set_page_config(page_title="Крипто-вероятности + Паттерны", layout="wide")
 
 st.title("📊 Калькулятор вероятностей + Паттерны криптомонет")
-st.markdown("Введите тикер монеты, и сервис рассчитает вероятности, найдёт свечные паттерны и выдаст сигналы с подтверждениями.")
+st.markdown("Введите тикер монеты, и сервис рассчитает вероятности движения на выбранном таймфрейме.")
 
 # ---------- Функции для паттернов (без TA-Lib) ----------
 def detect_hammer(o, h, l, c, idx):
@@ -112,7 +112,7 @@ def analyze_patterns_and_signals(data):
     for i in range(max(0, last_idx - 5), last_idx + 1):
         if detect_hammer(o, h, l, c, i):
             signals.append({
-                'date': data.index[i].strftime('%Y-%m-%d'),
+                'date': data.index[i].strftime('%Y-%m-%d %H:%M'),
                 'pattern': 'Молот (Hammer)',
                 'type': 'бычий разворот',
                 'price': float(c[i]),
@@ -120,7 +120,7 @@ def analyze_patterns_and_signals(data):
             })
         if detect_shooting_star(o, h, l, c, i):
             signals.append({
-                'date': data.index[i].strftime('%Y-%m-%d'),
+                'date': data.index[i].strftime('%Y-%m-%d %H:%M'),
                 'pattern': 'Падающая звезда (Shooting Star)',
                 'type': 'медвежий разворот',
                 'price': float(c[i]),
@@ -128,7 +128,7 @@ def analyze_patterns_and_signals(data):
             })
         if detect_doji(o, h, l, c, i):
             signals.append({
-                'date': data.index[i].strftime('%Y-%m-%d'),
+                'date': data.index[i].strftime('%Y-%m-%d %H:%M'),
                 'pattern': 'Доджи (Doji)',
                 'type': 'неопределённость',
                 'price': float(c[i]),
@@ -137,7 +137,7 @@ def analyze_patterns_and_signals(data):
         engulf = detect_engulfing(o, h, l, c, i)
         if engulf:
             signals.append({
-                'date': data.index[i].strftime('%Y-%m-%d'),
+                'date': data.index[i].strftime('%Y-%m-%d %H:%M'),
                 'pattern': 'Поглощение (Engulfing)',
                 'type': f'{engulf} разворот',
                 'price': float(c[i]),
@@ -145,7 +145,7 @@ def analyze_patterns_and_signals(data):
             })
         if detect_morning_star(o, h, l, c, i):
             signals.append({
-                'date': data.index[i].strftime('%Y-%m-%d'),
+                'date': data.index[i].strftime('%Y-%m-%d %H:%M'),
                 'pattern': 'Утренняя звезда (Morning Star)',
                 'type': 'бычий разворот',
                 'price': float(c[i]),
@@ -153,7 +153,7 @@ def analyze_patterns_and_signals(data):
             })
         if detect_evening_star(o, h, l, c, i):
             signals.append({
-                'date': data.index[i].strftime('%Y-%m-%d'),
+                'date': data.index[i].strftime('%Y-%m-%d %H:%M'),
                 'pattern': 'Вечерняя звезда (Evening Star)',
                 'type': 'медвежий разворот',
                 'price': float(c[i]),
@@ -198,7 +198,7 @@ def analyze_patterns_and_signals(data):
             signals[0]['divergence'] = div_signal
         else:
             signals.append({
-                'date': data.index[-1].strftime('%Y-%m-%d'),
+                'date': data.index[-1].strftime('%Y-%m-%d %H:%M'),
                 'pattern': 'Нет свечного паттерна',
                 'type': 'только индикаторы',
                 'price': price,
@@ -213,10 +213,10 @@ def analyze_patterns_and_signals(data):
 
     return signals
 
-# ---------- Функция текстового анализа вероятностей ----------
+# ---------- Функция текстового анализа ----------
 def analyze_probabilities(prob_up, prob_down, expected_price, current_price, 
                           var_95, prob_gain_10, prob_loss_10, std_return, 
-                          forecast_days, signals):
+                          forecast_steps, signals, timeframe):
     analysis = []
     
     # 1. Направление
@@ -225,15 +225,15 @@ def analyze_probabilities(prob_up, prob_down, expected_price, current_price,
     elif prob_down > 60:
         direction = "📉 **Медвежий настрой** — вероятность падения значительно выше роста."
     else:
-        direction = "⚖️ **Неопределённость** — вероятности близки к 50/50, рынок в боковике."
+        direction = "⚖️ **Неопределённость** — вероятности близки к 50/50."
     analysis.append(direction)
     
     # 2. Ожидаемое изменение
     expected_change = (expected_price / current_price - 1) * 100
     if expected_change > 2:
-        change_desc = f"Ожидаемый рост на {expected_change:.1f}% за {forecast_days} дней."
+        change_desc = f"Ожидаемый рост на {expected_change:.1f}% за {forecast_steps} {timeframe}-свечей."
     elif expected_change < -2:
-        change_desc = f"Ожидаемое падение на {-expected_change:.1f}% за {forecast_days} дней."
+        change_desc = f"Ожидаемое падение на {-expected_change:.1f}% за {forecast_steps} {timeframe}-свечей."
     else:
         change_desc = f"Ожидаемое изменение незначительно ({expected_change:.1f}%)."
     analysis.append(f"📊 {change_desc}")
@@ -294,8 +294,21 @@ def analyze_probabilities(prob_up, prob_down, expected_price, current_price,
 with st.sidebar:
     st.header("⚙️ Настройки")
     ticker = st.text_input("Введите тикер монеты", value="BTC-USD").upper()
-    period = st.selectbox("Период для анализа", ["7d", "30d", "90d", "6mo", "1y"], index=2)
-    forecast_days = st.slider("Прогнозируемый период (дней)", 1, 30, 7)
+    
+    timeframe = st.selectbox(
+        "Таймфрейм (интервал свечи)",
+        ["1m", "5m", "15m", "30m", "1h", "4h", "1d"],
+        index=5,
+        help="Для коротких интервалов может потребоваться больше исторических данных."
+    )
+    
+    forecast_steps = st.number_input(
+        "Количество шагов прогноза (свечей вперёд)",
+        min_value=1,
+        max_value=50,
+        value=5,
+        help="Сколько свечей вперёд моделировать."
+    )
     
     method = st.selectbox(
         "Метод моделирования вероятностей",
@@ -303,44 +316,61 @@ with st.sidebar:
         index=0
     )
     
-    half_life = st.slider("Период полураспада для весов (дней)", 5, 60, 20)
+    half_life = st.slider("Период полураспада для весов (дней)", 5, 60, 20,
+                          help="Меньшее значение — больше вес последних данных.")
     
     calculate = st.button("🚀 Рассчитать вероятности и паттерны")
 
-# Функция загрузки с автоувеличением периода
-def load_data_with_retry(ticker, period, min_days=30):
-    periods_to_try = [period, "90d", "1y"]
+# ---------- Загрузка данных с интервалом ----------
+def load_data_with_retry(ticker, timeframe, min_candles=100):
+    # Подбираем период в зависимости от таймфрейма
+    if timeframe in ['1m', '5m']:
+        period = '7d'       # yfinance даёт максимум 7 дней для минутных данных
+    elif timeframe in ['15m', '30m']:
+        period = '30d'
+    elif timeframe in ['1h', '4h']:
+        period = '90d'
+    else:  # '1d'
+        period = '1y'
+    
+    # Пробуем разные периоды, если данных мало
+    periods_to_try = [period, '90d', '1y']
     for p in periods_to_try:
-        data = yf.download(ticker, period=p, progress=False)
-        if not data.empty and 'Close' in data.columns:
-            close_series = data['Close']
-            if isinstance(close_series, pd.DataFrame):
-                close_series = close_series.iloc[:, 0]
-            if len(close_series) >= min_days:
-                return data, close_series, p
+        try:
+            data = yf.download(ticker, period=p, interval=timeframe, progress=False)
+            if not data.empty and 'Close' in data.columns:
+                close_series = data['Close']
+                if isinstance(close_series, pd.DataFrame):
+                    close_series = close_series.iloc[:, 0]
+                if len(close_series) >= min_candles:
+                    return data, close_series, p
+        except Exception:
+            continue
     return None, None, None
 
+# ---------- Основная логика ----------
 if calculate:
     try:
-        with st.spinner("Загружаем данные и анализируем..."):
-            data, close_series, used_period = load_data_with_retry(ticker, period, min_days=30)
+        with st.spinner(f"Загружаем данные ({timeframe})..."):
+            data, close_series, used_period = load_data_with_retry(ticker, timeframe, min_candles=100)
             if data is None:
-                st.error(f"❌ Не удалось загрузить достаточно данных для {ticker}.")
+                st.error(f"❌ Не удалось загрузить достаточно данных для {ticker} с таймфреймом {timeframe}.")
+                st.info("Попробуйте выбрать более крупный таймфрейм или другой тикер.")
                 st.stop()
             
-            if used_period != period:
-                st.info(f"ℹ️ Используем период {used_period} (дней: {len(close_series)})")
-            
+            st.info(f"ℹ️ Загружено {len(close_series)} свечей за период {used_period}.")
             current_price = float(close_series.iloc[-1])
         
-        # Расчёт доходностей
+        # Расчёт доходностей на интервале
         returns = np.log(close_series / close_series.shift(1)).dropna()
         if len(returns) < 10:
             st.error(f"❌ Недостаточно доходностей ({len(returns)} точек). Нужно минимум 10.")
             st.stop()
         
         # EWMA
-        lambda_ = np.exp(-np.log(2) / half_life)
+        lambda_ = np.exp(-np.log(2) / (half_life * 24))  # адаптация для любого таймфрейма (в часах)
+        # Для упрощения используем half_life как количество свечей (не дней)
+        lambda_ = np.exp(-np.log(2) / half_life)  # half_life в свечах
         weights = (1 - lambda_) * (lambda_ ** np.arange(len(returns)-1, -1, -1))
         weights = weights / weights.sum()
         mean_return = np.average(returns, weights=weights)
@@ -354,11 +384,11 @@ if calculate:
         n_simulations = 10000
         np.random.seed(42)
         if method == "Нормальное распределение":
-            random_returns = np.random.normal(mean_return, std_return, (forecast_days, n_simulations))
+            random_returns = np.random.normal(mean_return, std_return, (forecast_steps, n_simulations))
         elif method == "t-распределение (рекомендуется)":
-            random_returns = t.rvs(df, loc=loc, scale=scale, size=(forecast_days, n_simulations))
+            random_returns = t.rvs(df, loc=loc, scale=scale, size=(forecast_steps, n_simulations))
         else:
-            indices = np.random.choice(len(returns), size=(forecast_days, n_simulations), p=weights)
+            indices = np.random.choice(len(returns), size=(forecast_steps, n_simulations), p=weights)
             random_returns = returns.iloc[indices].values
         
         cumulative_returns = np.cumsum(random_returns, axis=0)
@@ -385,10 +415,11 @@ if calculate:
             'percentile_5': percentile_5,
             'percentile_95': percentile_95,
             'final_prices': final_prices,
-            'random_returns': random_returns,  # сохраним для траекторий
+            'random_returns': random_returns,
             'data': data,
             'ticker': ticker,
-            'forecast_days': forecast_days,
+            'forecast_steps': forecast_steps,
+            'timeframe': timeframe,
             'mean_return': mean_return,
             'std_return': std_return,
             'var_95': var_95,
@@ -423,15 +454,16 @@ if st.session_state.get("results"):
     with col4:
         st.metric("📉 Вероятность падения", f"{results['prob_down']:.1f}%")
     
-    # --- АНАЛИЗ ВЕРОЯТНОСТЕЙ ---
+    # Анализ вероятностей
     st.subheader("🧠 Анализ вероятностей и рекомендации")
     analysis_text = analyze_probabilities(
         results['prob_up'], results['prob_down'],
         results['expected_price'], results['current_price'],
         results['var_95'], results['prob_gain_10'],
         results['prob_loss_10'], results['std_return'],
-        results['forecast_days'],
-        results['signals']
+        results['forecast_steps'],
+        results['signals'],
+        results['timeframe']
     )
     for line in analysis_text:
         st.write(line)
@@ -494,7 +526,6 @@ if st.session_state.get("results"):
     )
     st.plotly_chart(fig, use_container_width=True)
     
-    # --- ГРАФИК СЦЕНАРИЕВ (траектории) ---
     st.subheader("📉 Примеры возможных траекторий (20 случайных сценариев)")
     random_returns = results['random_returns']
     current_price = results['current_price']
@@ -511,7 +542,6 @@ if st.session_state.get("results"):
             line=dict(width=0.8, color='lightgray'),
             showlegend=False
         ))
-    # Средняя траектория
     avg_path = current_price * np.exp(np.mean(np.cumsum(random_returns, axis=0), axis=1))
     avg_path = np.insert(avg_path, 0, current_price)
     fig_paths.add_trace(go.Scatter(
@@ -522,7 +552,7 @@ if st.session_state.get("results"):
         name='Средняя траектория'
     ))
     fig_paths.update_layout(
-        xaxis_title="Дни",
+        xaxis_title="Шаг (количество свечей)",
         yaxis_title="Цена ($)",
         height=400,
         hovermode='x unified'
@@ -533,11 +563,11 @@ if st.session_state.get("results"):
         col1, col2 = st.columns(2)
         with col1:
             st.write("**📊 Параметры доходности (взвешенные):**")
-            st.write(f"Средняя дневная доходность (EWMA): {results['mean_return']*100:.3f}%")
-            st.write(f"Волатильность (EWMA): {results['std_return']*100:.3f}%")
-            st.write(f"Количество дней в выборке: {len(results['data'])}")
-            st.write(f"Период: {results['data'].index[0].strftime('%Y-%m-%d')} - {results['data'].index[-1].strftime('%Y-%m-%d')}")
-            st.write(f"Использованный период: {results.get('used_period', 'не указан')}")
+            st.write(f"Средняя доходность за свечу (EWMA): {results['mean_return']*100:.3f}%")
+            st.write(f"Волатильность за свечу (EWMA): {results['std_return']*100:.3f}%")
+            st.write(f"Количество свечей в выборке: {len(results['data'])}")
+            st.write(f"Период: {results['data'].index[0].strftime('%Y-%m-%d %H:%M')} - {results['data'].index[-1].strftime('%Y-%m-%d %H:%M')}")
+            st.write(f"Использованный период загрузки: {results.get('used_period', 'не указан')}")
         with col2:
             st.write("**🎯 Доверительные интервалы (5-95%):**")
             st.write(f"Нижняя граница: ${results['percentile_5']:.2f}")
@@ -547,7 +577,7 @@ if st.session_state.get("results"):
             st.write(f"Вероятность роста >10%: {results['prob_gain_10']:.1f}%")
             st.write(f"Вероятность падения >10%: {results['prob_loss_10']:.1f}%")
         st.write(f"Метод моделирования: {results['method']}")
-        st.write(f"Период полураспада: {results['half_life']} дней")
+        st.write(f"Период полураспада (в свечах): {results['half_life']}")
     
     st.subheader("📉 Историческая динамика")
     fig2 = go.Figure()
@@ -577,7 +607,7 @@ if st.session_state.get("results"):
                 line=dict(color='purple', width=1, dash='dot')
             ))
     fig2.update_layout(
-        xaxis_title="Дата",
+        xaxis_title="Дата/время",
         yaxis_title=f"Цена ({results['ticker']})",
         height=400,
         hovermode='x unified'
@@ -589,7 +619,7 @@ if st.session_state.get("results"):
         st.rerun()
 
 else:
-    st.info("👈 Введите тикер и нажмите 'Рассчитать вероятности и паттерны'")
+    st.info("👈 Выберите настройки и нажмите 'Рассчитать вероятности и паттерны'")
     with st.expander("📚 Примеры тикеров"):
         st.write("""
         - **BTC-USD** - Bitcoin
@@ -600,29 +630,23 @@ else:
         - **AVAX-USD** - Avalanche
         - **MATIC-USD** - Polygon
         """)
-    with st.expander("🧠 Как работают паттерны и подтверждения"):
+    with st.expander("🧠 Как работают таймфреймы и прогноз"):
         st.write("""
-        **Свечные паттерны** (без TA-Lib, собственная реализация):
-        - Молот / Падающая звезда – разворотные сигналы.
-        - Доджи – неопределённость.
-        - Поглощение – сильный разворот.
-        - Утренняя/Вечерняя звезда – разворот из трёх свечей.
-        
-        **Подтверждения:**
-        - Объём торгов (высокий = подтверждение движения).
-        - Положение цены относительно скользящих средних (MA20/MA50).
-        - RSI (перекупленность/перепроданность).
-        - Дивергенция цены и RSI.
+        - **Таймфрейм** определяет длину одной свечи (1 минута, 5 минут, 1 час, день и т.д.).
+        - **Количество шагов** — сколько таких свечей вперёд моделируется.
+        - Прогноз на 15 минут = таймфрейм '15m', шаг=1.
+        - Прогноз на 1 час = '1h', шаг=1 (или '15m', шаг=4).
+        - Для коротких таймфреймов требуется больше исторических данных — сервис автоматически подбирает период загрузки.
         """)
 
 st.sidebar.markdown("---")
 st.sidebar.info(
-    "📌 **Что нового:**\n\n"
-    "✅ Детекция свечных паттернов (без TA-Lib)\n"
+    "📌 **Возможности:**\n\n"
+    "✅ Прогноз на любом таймфрейме (от 1 минуты до дня)\n"
+    "✅ Детекция свечных паттернов\n"
     "✅ Подтверждения (объём, MA, RSI, дивергенция)\n"
-    "✅ Текстовый анализ вероятностей и рекомендации\n"
-    "✅ График сценариев Монте-Карло\n"
-    "✅ t-распределение + EWMA для вероятностей\n\n"
+    "✅ Текстовый анализ и рекомендации\n"
+    "✅ Графики распределения и сценариев\n"
     "⚠️ Результаты не являются инвестиционной рекомендацией."
 )
 st.sidebar.caption("Сделано с ❤️ для криптоэнтузиастов")
