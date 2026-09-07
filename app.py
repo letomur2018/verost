@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 import yfinance as yf
 import plotly.graph_objects as go
 from scipy.stats import t
-import pytz
 
 st.set_page_config(page_title="Крипто-вероятности + Паттерны", layout="wide")
 
@@ -25,6 +24,100 @@ def format_price(price):
         return f"${price:.3f}"
     else:
         return f"${price:.2f}"
+
+# ---------- 2. Функция итогового отчёта ----------
+def generate_full_summary(results):
+    """
+    Генерирует подробный итоговый отчёт по всем данным.
+    """
+    lines = []
+    lines.append("## 📋 ИТОГОВЫЙ АНАЛИЗ")
+    lines.append("")
+    
+    # 1. Общая ситуация
+    price = results['current_price']
+    exp_price = results['expected_price']
+    change_pct = (exp_price / price - 1) * 100
+    lines.append(f"**Текущая цена:** {format_price(price)}")
+    lines.append(f"**Ожидаемая цена через {results['forecast_steps']} {results['timeframe']}-свечей:** {format_price(exp_price)} (изменение {change_pct:+.2f}%)")
+    lines.append("")
+    
+    # 2. Вероятности
+    prob_up = results['prob_up']
+    prob_down = results['prob_down']
+    if prob_up > 60:
+        direction = "🔺 **Бычий** — вероятность роста значительно выше."
+    elif prob_down > 60:
+        direction = "🔻 **Медвежий** — вероятность падения значительно выше."
+    else:
+        direction = "⚖️ **Нейтральный** — вероятности близки к 50/50."
+    lines.append(f"**Вероятность роста:** {prob_up:.1f}%")
+    lines.append(f"**Вероятность падения:** {prob_down:.1f}%")
+    lines.append(f"**Общий настрой:** {direction}")
+    lines.append("")
+    
+    # 3. Риск и волатильность
+    var_pct = (results['var_95'] / price) * 100
+    lines.append(f"**Волатильность (за свечу):** {results['std_return']*100:.3f}%")
+    lines.append(f"**VaR (95%):** {format_price(results['var_95'])} (потенциальные потери не превысят {var_pct:.1f}%)")
+    lines.append("")
+    
+    # 4. Паттерны и подтверждения
+    signals = results['signals']
+    if signals and signals[0]['pattern'] != 'Нет свечного паттерна':
+        latest = signals[0]
+        lines.append(f"**🕯️ Обнаружен паттерн:** {latest['pattern']} ({latest['type']})")
+        confirms = []
+        if latest.get('volume_confirmation') == 'высокий':
+            confirms.append("высокий объём")
+        if latest.get('price_above_ma20', False):
+            confirms.append("цена выше MA20")
+        if latest.get('rsi_signal') == 'перепроданность':
+            confirms.append("RSI перепроданность (бычий)")
+        elif latest.get('rsi_signal') == 'перекупленность':
+            confirms.append("RSI перекупленность (медвежий)")
+        if confirms:
+            lines.append(f"**✅ Подтверждения:** {', '.join(confirms)}")
+        else:
+            lines.append("⚠️ Подтверждений недостаточно.")
+    else:
+        lines.append("ℹ️ Свечных паттернов не обнаружено.")
+    lines.append("")
+    
+    # 5. Внутридневные паттерны
+    if results.get('hourly_avg') is not None:
+        best_hour = int(results['best_hour'])
+        worst_hour = int(results['worst_hour'])
+        hourly_avg = results['hourly_avg']
+        lines.append(f"**🕒 Внутридневные паттерны (UTC):**")
+        lines.append(f"- Лучший час: {best_hour:02d}:00 (средняя цена {format_price(hourly_avg[best_hour])})")
+        lines.append(f"- Худший час: {worst_hour:02d}:00 (средняя цена {format_price(hourly_avg[worst_hour])})")
+        lines.append("")
+    
+    # 6. Уровни поддержки/сопротивления
+    support = results['support']
+    resistance = results['resistance']
+    if support or resistance:
+        lines.append("**📊 Ключевые уровни:**")
+        if support:
+            lines.append(f"- Поддержка: {', '.join([format_price(l) for l in support])}")
+        if resistance:
+            lines.append(f"- Сопротивление: {', '.join([format_price(l) for l in resistance])}")
+        lines.append("")
+    
+    # 7. Рекомендация
+    if prob_up > 55 and prob_down < 45 and change_pct > 0:
+        rec = "🟢 **Рекомендация:** рассмотреть покупку (бычий сценарий)."
+    elif prob_down > 55 and prob_up < 45 and change_pct < 0:
+        rec = "🔴 **Рекомендация:** рассмотреть продажу или удержание (медвежий сценарий)."
+    else:
+        rec = "🟡 **Рекомендация:** рынок неопределён — лучше дождаться более чёткого сигнала."
+    lines.append(rec)
+    lines.append("")
+    lines.append("---")
+    lines.append("⚠️ *Данный анализ носит информационный характер и не является инвестиционной рекомендацией.*")
+    
+    return "\n".join(lines)
 
 # ---------- Функции для паттернов (без TA-Lib) ----------
 def detect_hammer(o, h, l, c, idx):
@@ -603,8 +696,8 @@ if st.session_state.get("results"):
     if results['hourly_avg'] is not None:
         st.subheader("🕒 Внутридневной анализ (средняя цена по часам UTC)")
         hourly_avg = results['hourly_avg']
-        best_hour = results['best_hour']
-        worst_hour = results['worst_hour']
+        best_hour = int(results['best_hour'])
+        worst_hour = int(results['worst_hour'])
         sessions = results['sessions']
 
         col1, col2 = st.columns(2)
@@ -667,7 +760,7 @@ if st.session_state.get("results"):
         else:
             st.write("—")
 
-    # --- Исторический график с поддержкой/сопротивлением, сессиями и открытием бирж ---
+    # --- Исторический график с уровнями и линиями открытия бирж ---
     st.subheader("📉 Историческая динамика с уровнями и сессиями")
     fig2 = go.Figure()
     fig2.add_trace(go.Scatter(
@@ -696,7 +789,7 @@ if st.session_state.get("results"):
                 line=dict(color='purple', width=1, dash='dot')
             ))
 
-    # Добавляем уровни поддержки/сопротивления
+    # Уровни
     for level in results['support']:
         fig2.add_hline(y=level, line_color='green', line_dash='dash',
                        annotation_text=f"Поддержка {format_price(level)}", annotation_position='bottom right')
@@ -704,21 +797,17 @@ if st.session_state.get("results"):
         fig2.add_hline(y=level, line_color='red', line_dash='dash',
                        annotation_text=f"Сопротивление {format_price(level)}", annotation_position='top right')
 
-    # Добавляем вертикальные линии открытия бирж (в UTC)
-    # Используем последние 5 дней для линий
+    # Линии открытия бирж
     last_dates = results['data'].index[-5:]
     for date in last_dates:
-        # Открытие США (14:30 UTC)
         us_open = date.replace(hour=14, minute=30, second=0, microsecond=0)
         if us_open in results['data'].index:
             fig2.add_vline(x=us_open, line_color='blue', line_dash='dash', opacity=0.5,
                            annotation_text="🇺🇸 NYSE Open", annotation_position='bottom')
-        # Открытие Европы (08:00 UTC)
         eu_open = date.replace(hour=8, minute=0, second=0, microsecond=0)
         if eu_open in results['data'].index:
             fig2.add_vline(x=eu_open, line_color='yellow', line_dash='dash', opacity=0.5,
                            annotation_text="🇪🇺 EU Open", annotation_position='bottom')
-        # Открытие Азии (00:00 UTC)
         asia_open = date.replace(hour=0, minute=0, second=0, microsecond=0)
         if asia_open in results['data'].index:
             fig2.add_vline(x=asia_open, line_color='orange', line_dash='dash', opacity=0.5,
@@ -731,6 +820,11 @@ if st.session_state.get("results"):
         hovermode='x unified'
     )
     st.plotly_chart(fig2, use_container_width=True)
+
+    # --- Итоговый вывод ---
+    st.subheader("📌 Общий итоговый вывод")
+    summary = generate_full_summary(results)
+    st.markdown(summary)
 
     # --- Детальная статистика ---
     with st.expander("📋 Детальная статистика и параметры модели"):
@@ -789,6 +883,7 @@ st.sidebar.info(
     "✅ Внутридневной анализ (сессии, часы)\n"
     "✅ Уровни поддержки/сопротивления\n"
     "✅ Вертикальные линии открытия бирж\n"
+    "✅ Итоговый сводный отчёт\n"
     "⚠️ Результаты не являются инвестиционной рекомендацией."
 )
 st.sidebar.caption("Сделано с ❤️ для криптоэнтузиастов")
