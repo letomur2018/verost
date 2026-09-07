@@ -96,15 +96,17 @@ def rsi(series, period=14):
 def moving_average(series, window):
     return series.rolling(window=window).mean()
 
-# ---------- Внутридневной анализ ----------
+# ---------- Внутридневной анализ (ИСПРАВЛЕНА) ----------
 def intraday_analysis(data):
+    """Анализ средней цены по часам и определение сессий."""
     if len(data) < 24:
         return None, None, None, None
     data = data.copy()
     data['hour'] = data.index.hour
     hourly_avg = data.groupby('hour')['Close'].mean()
-    best_hour = int(hourly_avg.idxmax())
-    worst_hour = int(hourly_avg.idxmin())
+    # Надёжное получение через сортировку
+    best_hour = int(hourly_avg.sort_values(ascending=False).index[0])
+    worst_hour = int(hourly_avg.sort_values(ascending=True).index[0])
     sessions = {
         'Asian': (0, 9),
         'European': (9, 17),
@@ -112,27 +114,23 @@ def intraday_analysis(data):
     }
     return hourly_avg, best_hour, worst_hour, sessions
 
-# ---------- Уровни поддержки/сопротивления (ИСПРАВЛЕНА) ----------
+# ---------- Уровни поддержки/сопротивления ----------
 def support_resistance(data, window=20):
     """Находит уровни поддержки и сопротивления."""
     high = data['High']
     low = data['Low']
     
-    # Приводим к Series, если это DataFrame
     if isinstance(high, pd.DataFrame):
         high = high.iloc[:, 0]
     if isinstance(low, pd.DataFrame):
         low = low.iloc[:, 0]
     
-    # Находим локальные максимумы и минимумы
     max_high = high.rolling(window, center=True).max()
     min_low = low.rolling(window, center=True).min()
     
-    # Только где значение равно максимуму/минимуму
     resistance_mask = high == max_high
     support_mask = low == min_low
     
-    # Извлекаем значения и приводим к float
     res_levels = []
     for val in high[resistance_mask].tail(3).values:
         if isinstance(val, (list, np.ndarray)):
@@ -151,7 +149,6 @@ def support_resistance(data, window=20):
         elif not pd.isna(val) and isinstance(val, (int, float)):
             sup_levels.append(float(val))
     
-    # Убираем дубликаты и сортируем
     res_levels = sorted(list(set(res_levels)), reverse=True)
     sup_levels = sorted(list(set(sup_levels)))
     
@@ -288,7 +285,7 @@ def analyze_patterns_and_signals(data):
 
     return signals
 
-# ---------- Текстовый анализ (краткий) ----------
+# ---------- Текстовый анализ ----------
 def analyze_probabilities(prob_up, prob_down, expected_price, current_price,
                           var_95, prob_gain_10, prob_loss_10, std_return,
                           forecast_steps, signals, timeframe):
@@ -357,7 +354,7 @@ def analyze_probabilities(prob_up, prob_down, expected_price, current_price,
 
     return analysis
 
-# ---------- Функция для общего вывода ----------
+# ---------- Общий вывод ----------
 def generate_full_summary(results):
     lines = []
     lines.append("## 📋 ИТОГОВЫЙ АНАЛИЗ")
@@ -459,7 +456,7 @@ with st.sidebar:
                           help="Меньшее значение — больше вес последних данных.")
     calculate = st.button("🚀 Рассчитать вероятности и паттерны")
 
-# ---------- Загрузка данных с интервалом ----------
+# ---------- Загрузка данных ----------
 def load_data_with_retry(ticker, timeframe, min_candles=100):
     if timeframe in ['1m', '5m']:
         period = '7d'
@@ -496,13 +493,11 @@ if calculate:
             st.info(f"ℹ️ Загружено {len(close_series)} свечей за период {used_period}.")
             current_price = float(close_series.iloc[-1])
 
-        # Расчёт доходностей
         returns = np.log(close_series / close_series.shift(1)).dropna()
         if len(returns) < 10:
             st.error(f"❌ Недостаточно доходностей ({len(returns)} точек). Нужно минимум 10.")
             st.stop()
 
-        # EWMA
         lambda_ = np.exp(-np.log(2) / half_life)
         weights = (1 - lambda_) * (lambda_ ** np.arange(len(returns)-1, -1, -1))
         weights = weights / weights.sum()
@@ -510,10 +505,8 @@ if calculate:
         var_w = np.average((returns - mean_return)**2, weights=weights)
         std_return = np.sqrt(var_w)
 
-        # t-распределение
         df, loc, scale = t.fit(returns)
 
-        # Моделирование
         n_simulations = 10000
         np.random.seed(42)
         if method == "Нормальное распределение":
@@ -537,10 +530,7 @@ if calculate:
         prob_loss_10 = np.mean(final_prices < current_price * 0.9) * 100
 
         signals = analyze_patterns_and_signals(data)
-
-        # Внутридневной анализ
         hourly_avg, best_hour, worst_hour, sessions = intraday_analysis(data)
-        # Уровни поддержки/сопротивления
         sup_levels, res_levels = support_resistance(data, window=20)
 
         st.session_state.results = {
@@ -584,7 +574,6 @@ if calculate:
 if st.session_state.get("results"):
     results = st.session_state.results
 
-    # Метрики
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("💰 Текущая цена", format_price(results['current_price']))
@@ -597,7 +586,6 @@ if st.session_state.get("results"):
     with col4:
         st.metric("📉 Вероятность падения", f"{results['prob_down']:.1f}%")
 
-    # Анализ вероятностей
     st.subheader("🧠 Анализ вероятностей и рекомендации")
     analysis_text = analyze_probabilities(
         results['prob_up'], results['prob_down'],
@@ -611,7 +599,6 @@ if st.session_state.get("results"):
     for line in analysis_text:
         st.write(line)
 
-    # Паттерны
     st.subheader("🕯️ Обнаруженные свечные паттерны и подтверждения")
     signals = results['signals']
     if signals:
@@ -643,7 +630,6 @@ if st.session_state.get("results"):
     else:
         st.info("ℹ️ Паттернов не обнаружено. Проверьте другие периоды.")
 
-    # Распределение вероятных цен
     st.subheader("📈 Распределение вероятных цен")
     fig = go.Figure()
     fig.add_trace(go.Histogram(
@@ -670,7 +656,6 @@ if st.session_state.get("results"):
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Траектории
     st.subheader("📉 Примеры возможных траекторий (20 случайных сценариев)")
     random_returns = results['random_returns']
     current_price = results['current_price']
@@ -704,7 +689,6 @@ if st.session_state.get("results"):
     )
     st.plotly_chart(fig_paths, use_container_width=True)
 
-    # Внутридневной анализ
     if results['hourly_avg'] is not None:
         st.subheader("🕒 Внутридневной анализ (средняя цена по часам UTC)")
         hourly_avg = results['hourly_avg']
@@ -722,7 +706,6 @@ if st.session_state.get("results"):
             st.write("- Европейская: 09:00–17:00")
             st.write("- Американская: 14:00–22:00")
 
-        # График средней цены по часам
         fig_hour = go.Figure()
         fig_hour.add_trace(go.Scatter(
             x=hourly_avg.index,
@@ -732,7 +715,6 @@ if st.session_state.get("results"):
             line=dict(color='blue', width=2),
             marker=dict(size=6)
         ))
-        # Зоны сессий
         for session, (start, end) in sessions.items():
             color = 'rgba(255,0,0,0.1)' if 'Asian' in session else 'rgba(0,255,0,0.1)' if 'European' in session else 'rgba(0,0,255,0.1)'
             fig_hour.add_vrect(
@@ -752,7 +734,6 @@ if st.session_state.get("results"):
         )
         st.plotly_chart(fig_hour, use_container_width=True)
 
-    # Уровни поддержки/сопротивления
     st.subheader("📊 Уровни поддержки и сопротивления (последние 3)")
     sup_levels = results['support']
     res_levels = results['resistance']
@@ -772,7 +753,6 @@ if st.session_state.get("results"):
         else:
             st.write("—")
 
-    # Исторический график с уровнями и сессиями
     st.subheader("📉 Историческая динамика с уровнями и сессиями")
     fig2 = go.Figure()
     fig2.add_trace(go.Scatter(
@@ -801,7 +781,6 @@ if st.session_state.get("results"):
                 line=dict(color='purple', width=1, dash='dot')
             ))
 
-    # Уровни
     for level in results['support']:
         fig2.add_hline(y=level, line_color='green', line_dash='dash',
                        annotation_text=f"Поддержка {format_price(level)}", annotation_position='bottom right')
@@ -809,7 +788,6 @@ if st.session_state.get("results"):
         fig2.add_hline(y=level, line_color='red', line_dash='dash',
                        annotation_text=f"Сопротивление {format_price(level)}", annotation_position='top right')
 
-    # Открытие бирж (последние 5 дней)
     last_dates = results['data'].index[-5:]
     for date in last_dates:
         us_open = date.replace(hour=14, minute=30, second=0, microsecond=0)
@@ -833,12 +811,10 @@ if st.session_state.get("results"):
     )
     st.plotly_chart(fig2, use_container_width=True)
 
-    # --- Общий итоговый вывод ---
     st.subheader("📌 Общий итоговый вывод")
     summary = generate_full_summary(results)
     st.markdown(summary)
 
-    # Детальная статистика
     with st.expander("📋 Детальная статистика и параметры модели"):
         col1, col2 = st.columns(2)
         with col1:
@@ -877,21 +853,19 @@ else:
         """)
     with st.expander("🧠 Как работают таймфреймы и прогноз"):
         st.write("""
-        - **Таймфрейм** определяет длину одной свечи (1 минута, 5 минут, 1 час, день и т.д.).
-        - **Количество шагов** — сколько таких свечей вперёд моделируется.
-        - Прогноз на 15 минут = таймфрейм '15m', шаг=1.
-        - Прогноз на 1 час = '1h', шаг=1 (или '15m', шаг=4).
-        - Для коротких таймфреймов требуется больше исторических данных — сервис автоматически подбирает период загрузки.
+        - **Таймфрейм** определяет длину одной свечи.
+        - **Количество шагов** — сколько свечей вперёд моделируется.
+        - Прогноз на 15 минут = '15m', шаг=1.
+        - Прогноз на 1 час = '1h', шаг=1.
         """)
 
 st.sidebar.markdown("---")
 st.sidebar.info(
     "📌 **Возможности:**\n\n"
-    "✅ Прогноз на любом таймфрейме (от 1 минуты до дня)\n"
+    "✅ Прогноз на любом таймфрейме\n"
     "✅ Детекция свечных паттернов\n"
     "✅ Подтверждения (объём, MA, RSI, дивергенция)\n"
     "✅ Текстовый анализ и рекомендации\n"
-    "✅ Графики распределения и сценариев\n"
     "✅ Внутридневной анализ (сессии, часы)\n"
     "✅ Уровни поддержки/сопротивления\n"
     "✅ Вертикальные линии открытия бирж\n"
