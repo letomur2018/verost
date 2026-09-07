@@ -14,7 +14,6 @@ st.markdown("Введите тикер монеты, и сервис рассч�
 
 # ---------- 1. Автоформатирование цены ----------
 def format_price(price):
-    """Автоматически выбирает количество знаков после запятой."""
     if price < 0.001:
         return f"${price:.8f}"
     elif price < 0.01:
@@ -99,15 +98,13 @@ def moving_average(series, window):
 
 # ---------- Внутридневной анализ ----------
 def intraday_analysis(data):
-    """Анализ средней цены по часам и определение сессий."""
     if len(data) < 24:
         return None, None, None, None
     data = data.copy()
     data['hour'] = data.index.hour
     hourly_avg = data.groupby('hour')['Close'].mean()
-    # Приводим к int через .item() для скалярного значения
-    best_hour = int(hourly_avg.idxmax().item()) if isinstance(hourly_avg.idxmax(), pd.Series) else int(hourly_avg.idxmax())
-    worst_hour = int(hourly_avg.idxmin().item()) if isinstance(hourly_avg.idxmin(), pd.Series) else int(hourly_avg.idxmin())
+    best_hour = int(hourly_avg.idxmax())
+    worst_hour = int(hourly_avg.idxmin())
     sessions = {
         'Asian': (0, 9),
         'European': (9, 17),
@@ -115,19 +112,49 @@ def intraday_analysis(data):
     }
     return hourly_avg, best_hour, worst_hour, sessions
 
-# ---------- Уровни поддержки/сопротивления ----------
+# ---------- Уровни поддержки/сопротивления (ИСПРАВЛЕНА) ----------
 def support_resistance(data, window=20):
+    """Находит уровни поддержки и сопротивления."""
     high = data['High']
     low = data['Low']
+    
+    # Приводим к Series, если это DataFrame
+    if isinstance(high, pd.DataFrame):
+        high = high.iloc[:, 0]
+    if isinstance(low, pd.DataFrame):
+        low = low.iloc[:, 0]
+    
+    # Находим локальные максимумы и минимумы
     max_high = high.rolling(window, center=True).max()
-    resistance = high[high == max_high].dropna()
     min_low = low.rolling(window, center=True).min()
-    support = low[low == min_low].dropna()
-    res_levels = resistance.tail(3).values.tolist() if not resistance.empty else []
-    sup_levels = support.tail(3).values.tolist() if not support.empty else []
-    # Приводим к float
-    res_levels = [float(x) for x in res_levels if not pd.isna(x)]
-    sup_levels = [float(x) for x in sup_levels if not pd.isna(x)]
+    
+    # Только где значение равно максимуму/минимуму
+    resistance_mask = high == max_high
+    support_mask = low == min_low
+    
+    # Извлекаем значения и приводим к float
+    res_levels = []
+    for val in high[resistance_mask].tail(3).values:
+        if isinstance(val, (list, np.ndarray)):
+            for v in val:
+                if not pd.isna(v) and isinstance(v, (int, float)):
+                    res_levels.append(float(v))
+        elif not pd.isna(val) and isinstance(val, (int, float)):
+            res_levels.append(float(val))
+    
+    sup_levels = []
+    for val in low[support_mask].tail(3).values:
+        if isinstance(val, (list, np.ndarray)):
+            for v in val:
+                if not pd.isna(v) and isinstance(v, (int, float)):
+                    sup_levels.append(float(v))
+        elif not pd.isna(val) and isinstance(val, (int, float)):
+            sup_levels.append(float(val))
+    
+    # Убираем дубликаты и сортируем
+    res_levels = sorted(list(set(res_levels)), reverse=True)
+    sup_levels = sorted(list(set(sup_levels)))
+    
     return sup_levels, res_levels
 
 # ---------- Анализ паттернов и подтверждений ----------
