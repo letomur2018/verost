@@ -5,11 +5,26 @@ from datetime import datetime, timedelta
 import yfinance as yf
 import plotly.graph_objects as go
 from scipy.stats import t
+import pytz
 
 st.set_page_config(page_title="Крипто-вероятности + Паттерны", layout="wide")
 
 st.title("📊 Калькулятор вероятностей + Паттерны криптомонет")
 st.markdown("Введите тикер монеты, и сервис рассчитает вероятности движения на выбранном таймфрейме.")
+
+# ---------- 1. Автоформатирование цены ----------
+def format_price(price):
+    """Автоматически выбирает количество знаков после запятой."""
+    if price < 0.001:
+        return f"${price:.8f}"
+    elif price < 0.01:
+        return f"${price:.6f}"
+    elif price < 1:
+        return f"${price:.4f}"
+    elif price < 100:
+        return f"${price:.3f}"
+    else:
+        return f"${price:.2f}"
 
 # ---------- Функции для паттернов (без TA-Lib) ----------
 def detect_hammer(o, h, l, c, idx):
@@ -81,6 +96,37 @@ def rsi(series, period=14):
 
 def moving_average(series, window):
     return series.rolling(window=window).mean()
+
+# ---------- Внутридневной анализ ----------
+def intraday_analysis(data):
+    """Анализ средней цены по часам и определение сессий."""
+    if len(data) < 24:
+        return None, None, None, None
+    # Извлекаем час UTC
+    data['hour'] = data.index.hour
+    hourly_avg = data.groupby('hour')['Close'].mean()
+    best_hour = hourly_avg.idxmax()
+    worst_hour = hourly_avg.idxmin()
+    # Сессии
+    sessions = {
+        'Asian': (0, 9),    # 00:00-09:00 UTC
+        'European': (9, 17),# 09:00-17:00 UTC
+        'American': (14, 22)# 14:00-22:00 UTC (пересекается с Европой)
+    }
+    return hourly_avg, best_hour, worst_hour, sessions
+
+# ---------- Уровни поддержки/сопротивления ----------
+def support_resistance(data, window=20):
+    """Находит уровни поддержки и сопротивления."""
+    high = data['High']
+    low = data['Low']
+    # Локальные максимумы (сопротивление)
+    resistance = high[high == high.rolling(window, center=True).max()]
+    support = low[low == low.rolling(window, center=True).min()]
+    # Берём последние 3 уровня
+    res_levels = resistance.tail(3).values.tolist()
+    sup_levels = support.tail(3).values.tolist()
+    return sup_levels, res_levels
 
 # ---------- Анализ паттернов и подтверждений ----------
 def analyze_patterns_and_signals(data):
@@ -213,13 +259,11 @@ def analyze_patterns_and_signals(data):
 
     return signals
 
-# ---------- Функция текстового анализа ----------
-def analyze_probabilities(prob_up, prob_down, expected_price, current_price, 
-                          var_95, prob_gain_10, prob_loss_10, std_return, 
+# ---------- Текстовый анализ ----------
+def analyze_probabilities(prob_up, prob_down, expected_price, current_price,
+                          var_95, prob_gain_10, prob_loss_10, std_return,
                           forecast_steps, signals, timeframe):
     analysis = []
-    
-    # 1. Направление
     if prob_up > 60:
         direction = "📈 **Бычий настрой** — вероятность роста значительно выше падения."
     elif prob_down > 60:
@@ -227,8 +271,7 @@ def analyze_probabilities(prob_up, prob_down, expected_price, current_price,
     else:
         direction = "⚖️ **Неопределённость** — вероятности близки к 50/50."
     analysis.append(direction)
-    
-    # 2. Ожидаемое изменение
+
     expected_change = (expected_price / current_price - 1) * 100
     if expected_change > 2:
         change_desc = f"Ожидаемый рост на {expected_change:.1f}% за {forecast_steps} {timeframe}-свечей."
@@ -237,8 +280,7 @@ def analyze_probabilities(prob_up, prob_down, expected_price, current_price,
     else:
         change_desc = f"Ожидаемое изменение незначительно ({expected_change:.1f}%)."
     analysis.append(f"📊 {change_desc}")
-    
-    # 3. Волатильность
+
     if std_return > 0.03:
         vol_desc = "Высокая волатильность — возможны сильные колебания."
     elif std_return > 0.015:
@@ -246,20 +288,17 @@ def analyze_probabilities(prob_up, prob_down, expected_price, current_price,
     else:
         vol_desc = "Низкая волатильность — рынок спокойный."
     analysis.append(f"🌊 {vol_desc}")
-    
-    # 4. VaR
+
     var_percent = (var_95 / current_price) * 100
     analysis.append(f"📉 **VaR (95%)**: потенциальные потери не превысят {var_percent:.1f}% с вероятностью 95%.")
-    
-    # 5. Сильные движения
+
     if prob_gain_10 > 20:
         analysis.append(f"🚀 Высокая вероятность ({prob_gain_10:.0f}%) роста >10%.")
     elif prob_loss_10 > 20:
         analysis.append(f"📉 Высокая вероятность ({prob_loss_10:.0f}%) падения >10%.")
     else:
         analysis.append("🔒 Вероятность сильных движений (>10%) невысока.")
-    
-    # 6. Паттерны и подтверждения
+
     if signals:
         latest = signals[0]
         if 'pattern' in latest and latest['pattern'] != 'Нет свечного паттерна':
@@ -279,29 +318,26 @@ def analyze_probabilities(prob_up, prob_down, expected_price, current_price,
                 analysis.append("⚠️ Подтверждений недостаточно — сигнал слабый.")
         else:
             analysis.append("ℹ️ Свечных паттернов не обнаружено. Ориентируйтесь на индикаторы.")
-    
-    # 7. Рекомендация
+
     if prob_up > 55 and prob_down < 45 and expected_change > 0:
         analysis.append("💡 **Рекомендация**: рассмотреть возможность покупки (бычий сценарий).")
     elif prob_down > 55 and prob_up < 45 and expected_change < 0:
         analysis.append("💡 **Рекомендация**: рассмотреть возможность продажи или удержания (медвежий сценарий).")
     else:
         analysis.append("💡 **Рекомендация**: рынок неопределён — лучше дождаться более чёткого сигнала.")
-    
+
     return analysis
 
 # ---------- Основной интерфейс ----------
 with st.sidebar:
     st.header("⚙️ Настройки")
     ticker = st.text_input("Введите тикер монеты", value="BTC-USD").upper()
-    
     timeframe = st.selectbox(
         "Таймфрейм (интервал свечи)",
         ["1m", "5m", "15m", "30m", "1h", "4h", "1d"],
         index=5,
         help="Для коротких интервалов может потребоваться больше исторических данных."
     )
-    
     forecast_steps = st.number_input(
         "Количество шагов прогноза (свечей вперёд)",
         min_value=1,
@@ -309,31 +345,26 @@ with st.sidebar:
         value=5,
         help="Сколько свечей вперёд моделировать."
     )
-    
     method = st.selectbox(
         "Метод моделирования вероятностей",
         ["t-распределение (рекомендуется)", "Нормальное распределение", "Исторический бутстрап"],
         index=0
     )
-    
-    half_life = st.slider("Период полураспада для весов (дней)", 5, 60, 20,
+    half_life = st.slider("Период полураспада для весов (в свечах)", 5, 60, 20,
                           help="Меньшее значение — больше вес последних данных.")
-    
     calculate = st.button("🚀 Рассчитать вероятности и паттерны")
 
 # ---------- Загрузка данных с интервалом ----------
 def load_data_with_retry(ticker, timeframe, min_candles=100):
-    # Подбираем период в зависимости от таймфрейма
     if timeframe in ['1m', '5m']:
-        period = '7d'       # yfinance даёт максимум 7 дней для минутных данных
+        period = '7d'
     elif timeframe in ['15m', '30m']:
         period = '30d'
     elif timeframe in ['1h', '4h']:
         period = '90d'
-    else:  # '1d'
+    else:
         period = '1y'
-    
-    # Пробуем разные периоды, если данных мало
+
     periods_to_try = [period, '90d', '1y']
     for p in periods_to_try:
         try:
@@ -357,29 +388,26 @@ if calculate:
                 st.error(f"❌ Не удалось загрузить достаточно данных для {ticker} с таймфреймом {timeframe}.")
                 st.info("Попробуйте выбрать более крупный таймфрейм или другой тикер.")
                 st.stop()
-            
             st.info(f"ℹ️ Загружено {len(close_series)} свечей за период {used_period}.")
             current_price = float(close_series.iloc[-1])
-        
-        # Расчёт доходностей на интервале
+
+        # Расчёт доходностей
         returns = np.log(close_series / close_series.shift(1)).dropna()
         if len(returns) < 10:
             st.error(f"❌ Недостаточно доходностей ({len(returns)} точек). Нужно минимум 10.")
             st.stop()
-        
+
         # EWMA
-        lambda_ = np.exp(-np.log(2) / (half_life * 24))  # адаптация для любого таймфрейма (в часах)
-        # Для упрощения используем half_life как количество свечей (не дней)
-        lambda_ = np.exp(-np.log(2) / half_life)  # half_life в свечах
+        lambda_ = np.exp(-np.log(2) / half_life)
         weights = (1 - lambda_) * (lambda_ ** np.arange(len(returns)-1, -1, -1))
         weights = weights / weights.sum()
         mean_return = np.average(returns, weights=weights)
         var_w = np.average((returns - mean_return)**2, weights=weights)
         std_return = np.sqrt(var_w)
-        
+
         # t-распределение
         df, loc, scale = t.fit(returns)
-        
+
         # Моделирование
         n_simulations = 10000
         np.random.seed(42)
@@ -390,11 +418,10 @@ if calculate:
         else:
             indices = np.random.choice(len(returns), size=(forecast_steps, n_simulations), p=weights)
             random_returns = returns.iloc[indices].values
-        
+
         cumulative_returns = np.cumsum(random_returns, axis=0)
         final_prices = current_price * np.exp(cumulative_returns[-1, :])
-        
-        # Вероятности и метрики
+
         prob_up = np.mean(final_prices > current_price) * 100
         prob_down = 100 - prob_up
         expected_price = float(np.mean(final_prices))
@@ -403,10 +430,14 @@ if calculate:
         var_95 = np.percentile(final_prices - current_price, 5)
         prob_gain_10 = np.mean(final_prices > current_price * 1.1) * 100
         prob_loss_10 = np.mean(final_prices < current_price * 0.9) * 100
-        
-        # Анализ паттернов
+
         signals = analyze_patterns_and_signals(data)
-        
+
+        # Внутридневной анализ
+        hourly_avg, best_hour, worst_hour, sessions = intraday_analysis(data)
+        # Уровни поддержки/сопротивления
+        sup_levels, res_levels = support_resistance(data, window=20)
+
         st.session_state.results = {
             'current_price': current_price,
             'expected_price': expected_price,
@@ -428,11 +459,17 @@ if calculate:
             'method': method,
             'half_life': half_life,
             'used_period': used_period,
-            'signals': signals
+            'signals': signals,
+            'hourly_avg': hourly_avg,
+            'best_hour': best_hour,
+            'worst_hour': worst_hour,
+            'sessions': sessions,
+            'support': sup_levels,
+            'resistance': res_levels
         }
-        
+
         st.success("✅ Анализ завершён!")
-        
+
     except Exception as e:
         st.error(f"⚠️ Ошибка: {str(e)}")
         import traceback
@@ -441,20 +478,21 @@ if calculate:
 # ---------- Отображение ----------
 if st.session_state.get("results"):
     results = st.session_state.results
-    
+
+    # --- Метрики с форматированием цены ---
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("💰 Текущая цена", f"${results['current_price']:.2f}")
+        st.metric("💰 Текущая цена", format_price(results['current_price']))
     with col2:
         delta_percent = ((results['expected_price'] / results['current_price'] - 1) * 100)
-        st.metric("📈 Ожидаемая цена", f"${results['expected_price']:.2f}", 
+        st.metric("📈 Ожидаемая цена", format_price(results['expected_price']),
                  delta=f"{delta_percent:.2f}%")
     with col3:
         st.metric("📊 Вероятность роста", f"{results['prob_up']:.1f}%")
     with col4:
         st.metric("📉 Вероятность падения", f"{results['prob_down']:.1f}%")
-    
-    # Анализ вероятностей
+
+    # --- Анализ вероятностей ---
     st.subheader("🧠 Анализ вероятностей и рекомендации")
     analysis_text = analyze_probabilities(
         results['prob_up'], results['prob_down'],
@@ -467,7 +505,8 @@ if st.session_state.get("results"):
     )
     for line in analysis_text:
         st.write(line)
-    
+
+    # --- Паттерны ---
     st.subheader("🕯️ Обнаруженные свечные паттерны и подтверждения")
     signals = results['signals']
     if signals:
@@ -477,7 +516,6 @@ if st.session_state.get("results"):
             use_container_width=True,
             hide_index=True
         )
-        
         first = signals[0]
         if 'volume_confirmation' in first:
             st.write("**📊 Подтверждения (на основе последней свечи):**")
@@ -499,7 +537,8 @@ if st.session_state.get("results"):
                 st.write(f"{div_color} Дивергенция: {first['divergence']}")
     else:
         st.info("ℹ️ Паттернов не обнаружено. Проверьте другие периоды.")
-    
+
+    # --- Распределение вероятных цен ---
     st.subheader("📈 Распределение вероятных цен")
     fig = go.Figure()
     fig.add_trace(go.Histogram(
@@ -509,23 +548,24 @@ if st.session_state.get("results"):
         marker_color='lightblue',
         opacity=0.7
     ))
-    fig.add_vline(x=results['current_price'], line_color="red", line_dash="dash", 
-                  annotation_text=f"Текущая: ${results['current_price']:.2f}")
+    fig.add_vline(x=results['current_price'], line_color="red", line_dash="dash",
+                  annotation_text=f"Текущая: {format_price(results['current_price'])}")
     fig.add_vline(x=results['expected_price'], line_color="green", line_dash="dash",
-                  annotation_text=f"Ожидаемая: ${results['expected_price']:.2f}")
+                  annotation_text=f"Ожидаемая: {format_price(results['expected_price'])}")
     fig.add_vline(x=results['percentile_5'], line_color="orange", line_dash="dot",
                   annotation_text="5%")
     fig.add_vline(x=results['percentile_95'], line_color="orange", line_dash="dot",
                   annotation_text="95%")
     fig.update_layout(
-        xaxis_title="Цена ($)",
+        xaxis_title="Цена",
         yaxis_title="Частота",
         height=400,
         showlegend=True,
         bargap=0.05
     )
     st.plotly_chart(fig, use_container_width=True)
-    
+
+    # --- Траектории ---
     st.subheader("📉 Примеры возможных траекторий (20 случайных сценариев)")
     random_returns = results['random_returns']
     current_price = results['current_price']
@@ -553,33 +593,82 @@ if st.session_state.get("results"):
     ))
     fig_paths.update_layout(
         xaxis_title="Шаг (количество свечей)",
-        yaxis_title="Цена ($)",
+        yaxis_title="Цена",
         height=400,
         hovermode='x unified'
     )
     st.plotly_chart(fig_paths, use_container_width=True)
-    
-    with st.expander("📋 Детальная статистика и параметры модели"):
+
+    # --- Внутридневной анализ ---
+    if results['hourly_avg'] is not None:
+        st.subheader("🕒 Внутридневной анализ (средняя цена по часам UTC)")
+        hourly_avg = results['hourly_avg']
+        best_hour = results['best_hour']
+        worst_hour = results['worst_hour']
+        sessions = results['sessions']
+
         col1, col2 = st.columns(2)
         with col1:
-            st.write("**📊 Параметры доходности (взвешенные):**")
-            st.write(f"Средняя доходность за свечу (EWMA): {results['mean_return']*100:.3f}%")
-            st.write(f"Волатильность за свечу (EWMA): {results['std_return']*100:.3f}%")
-            st.write(f"Количество свечей в выборке: {len(results['data'])}")
-            st.write(f"Период: {results['data'].index[0].strftime('%Y-%m-%d %H:%M')} - {results['data'].index[-1].strftime('%Y-%m-%d %H:%M')}")
-            st.write(f"Использованный период загрузки: {results.get('used_period', 'не указан')}")
+            st.write(f"🏆 **Лучший час**: {best_hour:02d}:00 (средняя цена {format_price(hourly_avg[best_hour])})")
+            st.write(f"📉 **Худший час**: {worst_hour:02d}:00 (средняя цена {format_price(hourly_avg[worst_hour])})")
         with col2:
-            st.write("**🎯 Доверительные интервалы (5-95%):**")
-            st.write(f"Нижняя граница: ${results['percentile_5']:.2f}")
-            st.write(f"Верхняя граница: ${results['percentile_95']:.2f}")
-            st.write(f"Диапазон: ${results['percentile_95'] - results['percentile_5']:.2f}")
-            st.write(f"VaR (95%): ${results['var_95']:.2f}")
-            st.write(f"Вероятность роста >10%: {results['prob_gain_10']:.1f}%")
-            st.write(f"Вероятность падения >10%: {results['prob_loss_10']:.1f}%")
-        st.write(f"Метод моделирования: {results['method']}")
-        st.write(f"Период полураспада (в свечах): {results['half_life']}")
-    
-    st.subheader("📉 Историческая динамика")
+            st.write("**🌍 Торговые сессии (UTC):**")
+            st.write("- Азиатская: 00:00–09:00")
+            st.write("- Европейская: 09:00–17:00")
+            st.write("- Американская: 14:00–22:00")
+
+        # График средней цены по часам
+        fig_hour = go.Figure()
+        fig_hour.add_trace(go.Scatter(
+            x=hourly_avg.index,
+            y=hourly_avg.values,
+            mode='lines+markers',
+            name='Средняя цена',
+            line=dict(color='blue', width=2),
+            marker=dict(size=6)
+        ))
+        # Зоны сессий
+        for session, (start, end) in sessions.items():
+            color = 'rgba(255,0,0,0.1)' if 'Asian' in session else 'rgba(0,255,0,0.1)' if 'European' in session else 'rgba(0,0,255,0.1)'
+            fig_hour.add_vrect(
+                x0=start, x1=end,
+                fillcolor=color,
+                opacity=0.3,
+                layer="below",
+                line_width=0,
+                annotation_text=session,
+                annotation_position="top"
+            )
+        fig_hour.update_layout(
+            xaxis_title="Час (UTC)",
+            yaxis_title="Средняя цена",
+            height=300,
+            hovermode='x unified'
+        )
+        st.plotly_chart(fig_hour, use_container_width=True)
+
+    # --- Уровни поддержки/сопротивления ---
+    st.subheader("📊 Уровни поддержки и сопротивления (последние 3)")
+    sup_levels = results['support']
+    res_levels = results['resistance']
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("**🛡️ Поддержка:**")
+        if sup_levels:
+            for level in sup_levels:
+                st.write(f"- {format_price(level)}")
+        else:
+            st.write("—")
+    with col2:
+        st.write("**🚧 Сопротивление:**")
+        if res_levels:
+            for level in res_levels:
+                st.write(f"- {format_price(level)}")
+        else:
+            st.write("—")
+
+    # --- Исторический график с поддержкой/сопротивлением, сессиями и открытием бирж ---
+    st.subheader("📉 Историческая динамика с уровнями и сессиями")
     fig2 = go.Figure()
     fig2.add_trace(go.Scatter(
         x=results['data'].index,
@@ -606,14 +695,64 @@ if st.session_state.get("results"):
                 name='MA50',
                 line=dict(color='purple', width=1, dash='dot')
             ))
+
+    # Добавляем уровни поддержки/сопротивления
+    for level in results['support']:
+        fig2.add_hline(y=level, line_color='green', line_dash='dash',
+                       annotation_text=f"Поддержка {format_price(level)}", annotation_position='bottom right')
+    for level in results['resistance']:
+        fig2.add_hline(y=level, line_color='red', line_dash='dash',
+                       annotation_text=f"Сопротивление {format_price(level)}", annotation_position='top right')
+
+    # Добавляем вертикальные линии открытия бирж (в UTC)
+    # Используем последние 5 дней для линий
+    last_dates = results['data'].index[-5:]
+    for date in last_dates:
+        # Открытие США (14:30 UTC)
+        us_open = date.replace(hour=14, minute=30, second=0, microsecond=0)
+        if us_open in results['data'].index:
+            fig2.add_vline(x=us_open, line_color='blue', line_dash='dash', opacity=0.5,
+                           annotation_text="🇺🇸 NYSE Open", annotation_position='bottom')
+        # Открытие Европы (08:00 UTC)
+        eu_open = date.replace(hour=8, minute=0, second=0, microsecond=0)
+        if eu_open in results['data'].index:
+            fig2.add_vline(x=eu_open, line_color='yellow', line_dash='dash', opacity=0.5,
+                           annotation_text="🇪🇺 EU Open", annotation_position='bottom')
+        # Открытие Азии (00:00 UTC)
+        asia_open = date.replace(hour=0, minute=0, second=0, microsecond=0)
+        if asia_open in results['data'].index:
+            fig2.add_vline(x=asia_open, line_color='orange', line_dash='dash', opacity=0.5,
+                           annotation_text="🇯🇵 Asia Open", annotation_position='bottom')
+
     fig2.update_layout(
         xaxis_title="Дата/время",
         yaxis_title=f"Цена ({results['ticker']})",
-        height=400,
+        height=500,
         hovermode='x unified'
     )
     st.plotly_chart(fig2, use_container_width=True)
-    
+
+    # --- Детальная статистика ---
+    with st.expander("📋 Детальная статистика и параметры модели"):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("**📊 Параметры доходности (взвешенные):**")
+            st.write(f"Средняя доходность за свечу (EWMA): {results['mean_return']*100:.3f}%")
+            st.write(f"Волатильность за свечу (EWMA): {results['std_return']*100:.3f}%")
+            st.write(f"Количество свечей в выборке: {len(results['data'])}")
+            st.write(f"Период: {results['data'].index[0].strftime('%Y-%m-%d %H:%M')} - {results['data'].index[-1].strftime('%Y-%m-%d %H:%M')}")
+            st.write(f"Использованный период загрузки: {results.get('used_period', 'не указан')}")
+        with col2:
+            st.write("**🎯 Доверительные интервалы (5-95%):**")
+            st.write(f"Нижняя граница: {format_price(results['percentile_5'])}")
+            st.write(f"Верхняя граница: {format_price(results['percentile_95'])}")
+            st.write(f"Диапазон: {format_price(results['percentile_95'] - results['percentile_5'])}")
+            st.write(f"VaR (95%): {format_price(results['var_95'])}")
+            st.write(f"Вероятность роста >10%: {results['prob_gain_10']:.1f}%")
+            st.write(f"Вероятность падения >10%: {results['prob_loss_10']:.1f}%")
+        st.write(f"Метод моделирования: {results['method']}")
+        st.write(f"Период полураспада (в свечах): {results['half_life']}")
+
     if st.button("🔄 Новый расчёт"):
         st.session_state.results = None
         st.rerun()
@@ -647,6 +786,9 @@ st.sidebar.info(
     "✅ Подтверждения (объём, MA, RSI, дивергенция)\n"
     "✅ Текстовый анализ и рекомендации\n"
     "✅ Графики распределения и сценариев\n"
+    "✅ Внутридневной анализ (сессии, часы)\n"
+    "✅ Уровни поддержки/сопротивления\n"
+    "✅ Вертикальные линии открытия бирж\n"
     "⚠️ Результаты не являются инвестиционной рекомендацией."
 )
 st.sidebar.caption("Сделано с ❤️ для криптоэнтузиастов")
