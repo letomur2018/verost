@@ -670,4 +670,205 @@ if st.session_state.get("results"):
         name='Средняя траектория'
     ))
     fig_paths.update_layout(
-        xaxis_title="Шаг (количество све
+        xaxis_title="Шаг (количество свечей)",
+        yaxis_title="Цена",
+        height=400,
+        hovermode='x unified'
+    )
+    st.plotly_chart(fig_paths, use_container_width=True)
+
+    # Внутридневной анализ
+    if results['hourly_avg'] is not None:
+        st.subheader("🕒 Внутридневной анализ (средняя цена по часам UTC)")
+        hourly_avg = results['hourly_avg']
+        best_hour = int(results['best_hour'])
+        worst_hour = int(results['worst_hour'])
+        sessions = results['sessions']
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write(f"🏆 **Лучший час**: {best_hour:02d}:00 (средняя цена {format_price(hourly_avg[best_hour])})")
+            st.write(f"📉 **Худший час**: {worst_hour:02d}:00 (средняя цена {format_price(hourly_avg[worst_hour])})")
+        with col2:
+            st.write("**🌍 Торговые сессии (UTC):**")
+            st.write("- Азиатская: 00:00–09:00")
+            st.write("- Европейская: 09:00–17:00")
+            st.write("- Американская: 14:00–22:00")
+
+        # График средней цены по часам
+        fig_hour = go.Figure()
+        fig_hour.add_trace(go.Scatter(
+            x=hourly_avg.index,
+            y=hourly_avg.values,
+            mode='lines+markers',
+            name='Средняя цена',
+            line=dict(color='blue', width=2),
+            marker=dict(size=6)
+        ))
+        # Зоны сессий
+        for session, (start, end) in sessions.items():
+            color = 'rgba(255,0,0,0.1)' if 'Asian' in session else 'rgba(0,255,0,0.1)' if 'European' in session else 'rgba(0,0,255,0.1)'
+            fig_hour.add_vrect(
+                x0=start, x1=end,
+                fillcolor=color,
+                opacity=0.3,
+                layer="below",
+                line_width=0,
+                annotation_text=session,
+                annotation_position="top"
+            )
+        fig_hour.update_layout(
+            xaxis_title="Час (UTC)",
+            yaxis_title="Средняя цена",
+            height=300,
+            hovermode='x unified'
+        )
+        st.plotly_chart(fig_hour, use_container_width=True)
+
+    # Уровни поддержки/сопротивления
+    st.subheader("📊 Уровни поддержки и сопротивления (последние 3)")
+    sup_levels = results['support']
+    res_levels = results['resistance']
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("**🛡️ Поддержка:**")
+        if sup_levels:
+            for level in sup_levels:
+                st.write(f"- {format_price(level)}")
+        else:
+            st.write("—")
+    with col2:
+        st.write("**🚧 Сопротивление:**")
+        if res_levels:
+            for level in res_levels:
+                st.write(f"- {format_price(level)}")
+        else:
+            st.write("—")
+
+    # Исторический график с уровнями и сессиями
+    st.subheader("📉 Историческая динамика с уровнями и сессиями")
+    fig2 = go.Figure()
+    fig2.add_trace(go.Scatter(
+        x=results['data'].index,
+        y=results['data']['Close'],
+        mode='lines',
+        name='Цена закрытия',
+        line=dict(color='blue', width=2)
+    ))
+    if len(results['data']) > 20:
+        ma20 = results['data']['Close'].rolling(20).mean()
+        fig2.add_trace(go.Scatter(
+            x=results['data'].index,
+            y=ma20,
+            mode='lines',
+            name='MA20',
+            line=dict(color='orange', width=1, dash='dash')
+        ))
+        if len(results['data']) >= 50:
+            ma50 = results['data']['Close'].rolling(50).mean()
+            fig2.add_trace(go.Scatter(
+                x=results['data'].index,
+                y=ma50,
+                mode='lines',
+                name='MA50',
+                line=dict(color='purple', width=1, dash='dot')
+            ))
+
+    # Уровни
+    for level in results['support']:
+        fig2.add_hline(y=level, line_color='green', line_dash='dash',
+                       annotation_text=f"Поддержка {format_price(level)}", annotation_position='bottom right')
+    for level in results['resistance']:
+        fig2.add_hline(y=level, line_color='red', line_dash='dash',
+                       annotation_text=f"Сопротивление {format_price(level)}", annotation_position='top right')
+
+    # Открытие бирж (последние 5 дней)
+    last_dates = results['data'].index[-5:]
+    for date in last_dates:
+        us_open = date.replace(hour=14, minute=30, second=0, microsecond=0)
+        if us_open in results['data'].index:
+            fig2.add_vline(x=us_open, line_color='blue', line_dash='dash', opacity=0.5,
+                           annotation_text="🇺🇸 NYSE Open", annotation_position='bottom')
+        eu_open = date.replace(hour=8, minute=0, second=0, microsecond=0)
+        if eu_open in results['data'].index:
+            fig2.add_vline(x=eu_open, line_color='yellow', line_dash='dash', opacity=0.5,
+                           annotation_text="🇪🇺 EU Open", annotation_position='bottom')
+        asia_open = date.replace(hour=0, minute=0, second=0, microsecond=0)
+        if asia_open in results['data'].index:
+            fig2.add_vline(x=asia_open, line_color='orange', line_dash='dash', opacity=0.5,
+                           annotation_text="🇯🇵 Asia Open", annotation_position='bottom')
+
+    fig2.update_layout(
+        xaxis_title="Дата/время",
+        yaxis_title=f"Цена ({results['ticker']})",
+        height=500,
+        hovermode='x unified'
+    )
+    st.plotly_chart(fig2, use_container_width=True)
+
+    # --- Общий итоговый вывод ---
+    st.subheader("📌 Общий итоговый вывод")
+    summary = generate_full_summary(results)
+    st.markdown(summary)
+
+    # Детальная статистика
+    with st.expander("📋 Детальная статистика и параметры модели"):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("**📊 Параметры доходности (взвешенные):**")
+            st.write(f"Средняя доходность за свечу (EWMA): {results['mean_return']*100:.3f}%")
+            st.write(f"Волатильность за свечу (EWMA): {results['std_return']*100:.3f}%")
+            st.write(f"Количество свечей в выборке: {len(results['data'])}")
+            st.write(f"Период: {results['data'].index[0].strftime('%Y-%m-%d %H:%M')} - {results['data'].index[-1].strftime('%Y-%m-%d %H:%M')}")
+            st.write(f"Использованный период загрузки: {results.get('used_period', 'не указан')}")
+        with col2:
+            st.write("**🎯 Доверительные интервалы (5-95%):**")
+            st.write(f"Нижняя граница: {format_price(results['percentile_5'])}")
+            st.write(f"Верхняя граница: {format_price(results['percentile_95'])}")
+            st.write(f"Диапазон: {format_price(results['percentile_95'] - results['percentile_5'])}")
+            st.write(f"VaR (95%): {format_price(results['var_95'])}")
+            st.write(f"Вероятность роста >10%: {results['prob_gain_10']:.1f}%")
+            st.write(f"Вероятность падения >10%: {results['prob_loss_10']:.1f}%")
+        st.write(f"Метод моделирования: {results['method']}")
+        st.write(f"Период полураспада (в свечах): {results['half_life']}")
+
+    if st.button("🔄 Новый расчёт"):
+        st.session_state.results = None
+        st.rerun()
+
+else:
+    st.info("👈 Выберите настройки и нажмите 'Рассчитать вероятности и паттерны'")
+    with st.expander("📚 Примеры тикеров"):
+        st.write("""
+        - **BTC-USD** - Bitcoin
+        - **ETH-USD** - Ethereum
+        - **SOL-USD** - Solana
+        - **ADA-USD** - Cardano
+        - **DOT-USD** - Polkadot
+        - **AVAX-USD** - Avalanche
+        - **MATIC-USD** - Polygon
+        """)
+    with st.expander("🧠 Как работают таймфреймы и прогноз"):
+        st.write("""
+        - **Таймфрейм** определяет длину одной свечи (1 минута, 5 минут, 1 час, день и т.д.).
+        - **Количество шагов** — сколько таких свечей вперёд моделируется.
+        - Прогноз на 15 минут = таймфрейм '15m', шаг=1.
+        - Прогноз на 1 час = '1h', шаг=1 (или '15m', шаг=4).
+        - Для коротких таймфреймов требуется больше исторических данных — сервис автоматически подбирает период загрузки.
+        """)
+
+st.sidebar.markdown("---")
+st.sidebar.info(
+    "📌 **Возможности:**\n\n"
+    "✅ Прогноз на любом таймфрейме (от 1 минуты до дня)\n"
+    "✅ Детекция свечных паттернов\n"
+    "✅ Подтверждения (объём, MA, RSI, дивергенция)\n"
+    "✅ Текстовый анализ и рекомендации\n"
+    "✅ Графики распределения и сценариев\n"
+    "✅ Внутридневной анализ (сессии, часы)\n"
+    "✅ Уровни поддержки/сопротивления\n"
+    "✅ Вертикальные линии открытия бирж\n"
+    "✅ Общий итоговый вывод\n"
+    "⚠️ Результаты не являются инвестиционной рекомендацией."
+)
+st.sidebar.caption("Сделано с ❤️ для криптоэнтузиастов")
