@@ -104,9 +104,22 @@ def intraday_analysis(data):
     data = data.copy()
     data['hour'] = data.index.hour
     hourly_avg = data.groupby('hour')['Close'].mean()
-    # Надёжное получение через сортировку
-    best_hour = int(hourly_avg.sort_values(ascending=False).index[0])
-    worst_hour = int(hourly_avg.sort_values(ascending=True).index[0])
+    
+    # Убеждаемся, что это Series
+    if isinstance(hourly_avg, pd.DataFrame):
+        hourly_avg = hourly_avg.iloc[:, 0]
+    
+    # Получаем лучший и худший час
+    try:
+        best_hour = int(hourly_avg.idxmax())
+    except (TypeError, ValueError):
+        best_hour = int(hourly_avg.idxmax().iloc[0]) if hasattr(hourly_avg.idxmax(), 'iloc') else int(hourly_avg.idxmax())
+    
+    try:
+        worst_hour = int(hourly_avg.idxmin())
+    except (TypeError, ValueError):
+        worst_hour = int(hourly_avg.idxmin().iloc[0]) if hasattr(hourly_avg.idxmin(), 'iloc') else int(hourly_avg.idxmin())
+    
     sessions = {
         'Asian': (0, 9),
         'European': (9, 17),
